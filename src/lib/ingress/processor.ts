@@ -38,11 +38,29 @@ function generateRunId(): string {
   return generateId("run");
 }
 
-export function isDuplicate(idempotencyKey: string): boolean {
-  // Check in-memory first
+/**
+ * Is this idempotency key already recorded?
+ *
+ * It has to be ASYNC, and until the database integration test existed it was
+ * not. It used to be synchronous and check only the in-memory Set, on the
+ * reasoning that "the DB check is handled in processPayload" - but
+ * processPayload does not signal a duplicate, it RETURNS THE EXISTING RUN. So
+ * a retried CI webhook in production was answered `201` again, with the
+ * original run's data, and no error. The documented `409` only ever happened
+ * inside a single process's lifetime in demo mode.
+ *
+ * That is the whole reason the route's 409 existed on paper and not in
+ * production.
+ */
+export async function isDuplicate(idempotencyKey: string): Promise<boolean> {
   if (idempotencyKeys.has(idempotencyKey)) return true;
-  // In production, check DB
-  return false; // DB check handled in processPayload
+  if (isDemoMode()) return false;
+
+  const existing = await prisma.testRun.findUnique({
+    where: { idempotencyKey },
+    select: { id: true },
+  });
+  return existing !== null;
 }
 
 function computeGateDecision(
@@ -423,16 +441,140 @@ async function processToDatabase(
 
 // ── Accessors ──────────────────────────────────────────────────────────────
 
-export function getRun(runId: string): StoredRun | undefined {
-  return runs.get(runId);
+/**
+ * What the read endpoints return.
+ *
+ * Deliberately NOT `StoredRun`: that type carries the full submitted payload,
+ * which only the in-memory store has. Deriving a fake payload to satisfy it
+ * would be inventing data, so the read model is declared separately and both
+ * stores project into it. The route already projected exactly these fields.
+ */
+export interface RunSummary {
+  id: string;
+  status: string;
+  gateDecision: string;
+  stats: {
+    total: number;
+    passed: number;
+    failed: number;
+    skipped: number;
+    flaky: number;
+    timedOut: number;
+  };
+  repository: string;
+  branch: string;
+  commit: string;
+  duration?: number;
+  receivedAt: Date;
+  processedAt?: Date;
 }
 
-export function getAllRuns(): StoredRun[] {
-  return Array.from(runs.values()).sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime());
+function summarize(stored: StoredRun): RunSummary {
+  return {
+    id: stored.id,
+    status: stored.status,
+    gateDecision: stored.gateDecision,
+    stats: stored.stats,
+    repository: stored.payload.repository,
+    branch: stored.payload.branch,
+    commit: stored.payload.commit,
+    duration: stored.duration,
+    receivedAt: stored.receivedAt,
+    processedAt: stored.processedAt,
+  };
 }
 
-export function getRunCount(): number {
-  return runs.size;
+/** The row shape the accessors select. Declared so Prisma's result stays typed. */
+type RunRow = {
+  id: string;
+  status: string;
+  gateDecision: string;
+  totalTests: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  flaky: number;
+  branch: string;
+  commitSha: string;
+  duration: number | null;
+  createdAt: Date;
+  finishedAt: Date | null;
+  repository: { fullName: string } | null;
+};
+
+function summarizeRow(row: RunRow): RunSummary {
+  return {
+    id: row.id,
+    // The schema stores a CI status; the read model reports ingestion state,
+    // which is always "processed" for a row that exists.
+    status: "processed",
+    gateDecision: row.gateDecision,
+    stats: {
+      total: row.totalTests,
+      passed: row.passed,
+      failed: row.failed,
+      skipped: row.skipped,
+      flaky: row.flaky,
+      // The schema has no timed-out counter; the ingestion payload's
+      // `timed_out` maps onto `failed` on the way in, so it is not invented
+      // back out here.
+      timedOut: 0,
+    },
+    repository: row.repository?.fullName ?? "",
+    branch: row.branch,
+    commit: row.commitSha,
+    duration: row.duration ?? undefined,
+    receivedAt: row.createdAt,
+    processedAt: row.finishedAt ?? undefined,
+  };
+}
+
+const RUN_SELECT = {
+  id: true,
+  status: true,
+  gateDecision: true,
+  totalTests: true,
+  passed: true,
+  failed: true,
+  skipped: true,
+  flaky: true,
+  branch: true,
+  commitSha: true,
+  duration: true,
+  createdAt: true,
+  finishedAt: true,
+  repository: { select: { fullName: true } },
+} as const;
+
+export async function getRun(runId: string): Promise<RunSummary | undefined> {
+  if (isDemoMode()) {
+    const stored = runs.get(runId);
+    return stored ? summarize(stored) : undefined;
+  }
+
+  const row = await prisma.testRun.findUnique({ where: { id: runId }, select: RUN_SELECT });
+  return row ? summarizeRow(row) : undefined;
+}
+
+export async function getAllRuns(limit = 20): Promise<RunSummary[]> {
+  if (isDemoMode()) {
+    return Array.from(runs.values())
+      .sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime())
+      .slice(0, limit)
+      .map(summarize);
+  }
+
+  const rows = await prisma.testRun.findMany({
+    orderBy: { createdAt: "desc" },
+    take: limit,
+    select: RUN_SELECT,
+  });
+  return rows.map(summarizeRow);
+}
+
+export async function getRunCount(): Promise<number> {
+  if (isDemoMode()) return runs.size;
+  return prisma.testRun.count();
 }
 
 export function clearRuns(): void {

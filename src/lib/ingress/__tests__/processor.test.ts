@@ -115,11 +115,11 @@ describe("processPayload", () => {
 describe("idempotency", () => {
   it("records the key and reports later duplicates", async () => {
     await processPayload(payloadWith([{ status: "passed" }], { idempotencyKey: "k1" }));
-    expect(isDuplicate("k1")).toBe(true);
+    expect(await isDuplicate("k1")).toBe(true);
   });
 
-  it("does not report an unseen key as a duplicate", () => {
-    expect(isDuplicate("never-seen")).toBe(false);
+  it("does not report an unseen key as a duplicate", async () => {
+    expect(await isDuplicate("never-seen")).toBe(false);
   });
 
   it("still accepts a run with an empty payload suite boundary", async () => {
@@ -135,17 +135,33 @@ describe("accessors", () => {
     await processPayload(payloadWith([{ status: "passed" }]));
     await processPayload(payloadWith([{ status: "failed" }]));
 
-    expect(getRunCount()).toBe(2);
-    expect(getAllRuns()).toHaveLength(2);
+    expect(await getRunCount()).toBe(2);
+    expect(await getAllRuns()).toHaveLength(2);
   });
 
-  it("returns the stored run by id", async () => {
+  it("returns a summary for a stored run, carrying the fields the read API needs", async () => {
+    // The accessors return a RunSummary rather than the stored record, so this
+    // asserts the projection: repository, branch and commit come from the
+    // payload, and the stats survive intact.
     const stored = await processPayload(payloadWith([{ status: "passed" }]));
-    expect(getRun(stored.id)).toEqual(stored);
+    const summary = await getRun(stored.id);
+
+    expect(summary).toEqual({
+      id: stored.id,
+      status: stored.status,
+      gateDecision: stored.gateDecision,
+      stats: stored.stats,
+      repository: stored.payload.repository,
+      branch: stored.payload.branch,
+      commit: stored.payload.commit,
+      duration: stored.duration,
+      receivedAt: stored.receivedAt,
+      processedAt: stored.processedAt,
+    });
   });
 
-  it("returns undefined for an unknown id", () => {
-    expect(getRun("run_does_not_exist")).toBeUndefined();
+  it("returns undefined for an unknown id", async () => {
+    expect(await getRun("run_does_not_exist")).toBeUndefined();
   });
 
   it("orders runs newest first", async () => {
@@ -157,15 +173,22 @@ describe("accessors", () => {
     const newer = await processPayload(payloadWith([{ status: "passed" }]));
     newer.receivedAt = new Date(base);
 
-    expect(getAllRuns().map((r) => r.id)).toEqual([newer.id, older.id]);
+    expect((await getAllRuns()).map((r) => r.id)).toEqual([newer.id, older.id]);
+  });
+
+  it("respects the limit", async () => {
+    await processPayload(payloadWith([{ status: "passed" }]));
+    await processPayload(payloadWith([{ status: "passed" }]));
+
+    expect(await getAllRuns(1)).toHaveLength(1);
   });
 
   it("forgets everything on clear", async () => {
     await processPayload(payloadWith([{ status: "passed" }], { idempotencyKey: "k2" }));
     clearRuns();
 
-    expect(getRunCount()).toBe(0);
-    expect(getAllRuns()).toEqual([]);
-    expect(isDuplicate("k2")).toBe(false);
+    expect(await getRunCount()).toBe(0);
+    expect(await getAllRuns()).toEqual([]);
+    expect(await isDuplicate("k2")).toBe(false);
   });
 });
