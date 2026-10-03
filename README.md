@@ -121,7 +121,7 @@ Numbers from `pnpm gate`, reproducible on a clean checkout:
 | `prettier --check`                | clean                                                          |
 | `tsc --noEmit`                    | 0 errors                                                       |
 | `eslint` (type-aware)             | 0 problems                                                     |
-| Unit tests                        | **329 passing**, 25 files                                      |
+| Unit tests                        | **341 passing**, 25 files                                      |
 | Coverage (domain + components)    | **79%** statements, **73%** branches — floor enforced at 70/65 |
 | `next build`                      | 22 routes emitted                                              |
 | E2E (Playwright)                  | against the **production build**, 743 tests, 5 browsers        |
@@ -272,24 +272,27 @@ does not:
 - Quality-gate evaluation (8 rule types, 4 severities, 4 conditions)
 - Token-bucket rate limiting, HMAC webhook verification, secret redaction
 - Full dashboard UI: 11 routes, responsive, accessible
-- 329 unit tests, 743 end-to-end across five browser projects, six local gates
+- 341 unit tests, 743 end-to-end across five browser projects, six local gates
+- The production Prisma branch, on every push, against a real PostgreSQL
 
 **Implemented but not exercised end to end**
 
-- **The CI ingestion endpoint is authenticated, and its behaviour past the auth
-  check is not.** `POST /api/ingress` requires `Authorization: Bearer
-$INGEST_API_KEY`, compares it in constant time, and refuses to run at all when
-  the key is unset — three ways, proven against real builds. What happens _after_
-  a request authenticates is only exercised in demo mode: with a database
-  configured the processor writes through Prisma, and that branch has no
-  integration test because it needs a live PostgreSQL instance.
+- **The CI ingestion endpoint is authenticated, and that is proven three ways.**
+  `POST /api/ingress` requires `Authorization: Bearer $INGEST_API_KEY`, compares
+  it in constant time, and refuses to run at all when the key is unset — by
+  unit test, over real HTTP against a non-demo build, and by neutering the check
+  and watching the end-to-end suite go red. What is _not_ proven is the path
+  after authentication against a production-sized database; the integration job
+  uses a throwaway container.
 - **GitHub App publishing.** The configuration check and status reporting are
   real and tested; the API calls to create Check Runs are not implemented. The
   dead stubs that used to sit there pretending otherwise were deleted rather
   than kept as decoration.
-- **PostgreSQL writes.** The Prisma schema and queries exist and the demo path
-  bypasses them by design; the production branch has no integration test
-  because it needs a live database.
+- **PostgreSQL writes are covered, but only against a throwaway database.** A CI
+  job runs the ingestion pipeline against a real PostgreSQL container on every
+  push, applying the checked-in migrations first. What it does not cover is a
+  production-sized database: connection limits, slow queries under load, and
+  the migration path against a database that already holds real data.
 
 **Not started**
 

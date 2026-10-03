@@ -193,6 +193,85 @@ vulnerability reporting, which needs no address to be correct.
 
 ---
 
+## What the database test found on its first run
+
+The integration job has never run locally — there is no PostgreSQL and no Docker
+on this machine — so its first execution was the CI one. It failed, and it
+failed for the only interesting reason available: the branch it exists to cover
+was broken.
+
+**Reads never left memory.** `getRun`, `getAllRuns` and `getRunCount` all read
+the in-memory `Map`, unconditionally, while `processPayload` writes through
+Prisma whenever demo mode is off. A real deployment therefore answered `GET
+/api/ingress` with `200` and an empty list forever, no matter how much had been
+ingested. Nothing caught it because every other test in the repository ran with
+demo mode on, where the Map is the correct store.
+
+**Idempotency returned `201`, not `409`.** `isDuplicate` was synchronous and
+checked only the in-memory `Set`, with a comment saying the database check was
+handled in `processPayload` — where it was not handled as a duplicate at all,
+just returned as an existing run. So a retried CI webhook in production was
+accepted again with the original run's data and no error. The documented `409`
+only ever happened inside one process's lifetime, in demo mode.
+
+Both are fixed: the accessors are async and query Prisma outside demo mode, and
+`isDuplicate` checks the `TestRun` table. The read model is a declared
+`RunSummary` rather than the stored record, because deriving a fake payload to
+satisfy `StoredRun` would have been inventing data — and the route already
+projected exactly those fields.
+
+Neither bug is exotic. They are what happens when a read path and a write path
+grow separately and only the write path gets exercised.
+
+Dependabot's first act was to open seven pull requests, one of which bumps
+Prisma to 7 — which removed `url` from the datasource block and broke
+`postinstall`. CI caught it immediately. That is the gate doing exactly what it
+is for, and it is also why the framework upgrade in ADR 0005 was worth doing by
+hand.
+
+### The race needed three attempts, and the third one is the actual fix
+
+The first fix made `getRun`/`getAllRuns` read Prisma. Then the integration test
+reported the idempotency case as **flaky**: first POST `500`, retry `201`. That
+is not flakiness — it is two requests arriving together.
+
+Converting find-then-create into `upsert` was the obvious response and it was
+**not enough**. Prisma does not compile `upsert` to a native `INSERT ... ON
+CONFLICT` on PostgreSQL; it is still a lookup followed by a write, so the race
+simply moved:
+
+```
+Invalid `prisma.repository.upsert()` invocation:
+Unique constraint failed on the fields: (`organizationId`,`fullName`)   P2002
+```
+
+The fix that works is a bounded retry on `P2002`. It is safe precisely because
+of the detail that makes the error look fatal: the loser of the race fails even
+though the row it wanted now exists, so the next attempt finds it and succeeds.
+A real duplicate — two genuinely different keys colliding — still surfaces,
+because the retry is bounded.
+
+`Workflow` had no unique constraint at all, only an index, so concurrent
+requests there would have written two identical rows: quieter corruption than a
+500, and worse. Migration 1 adds it, because an upsert needs something to be
+atomic _against_.
+
+Two things had to be fixed for that error to be visible at all. The route caught
+everything and returned the message in a body no failing assertion displays,
+while never writing it to the server log — so a CI run reported "500" and
+nothing else. It now logs with its requestId, and the test puts the body in the
+failure message. A 500 that is returned but never logged is undiagnosable after
+the fact.
+
+The final run is 5 passed, zero flaky, zero server-side errors.
+
+The same edit fixed two more bugs in the line it touched: the slug regex was
+`/s+/g`, so it replaced runs of the **letter s** — `tests` became `te-ts` — and
+it appended `.yml` unconditionally, so `integration.yml` became
+`integration.yml.yml`. `workflowFilePath` is now exported and tested directly.
+
+---
+
 ## The security finding that came out of writing CI
 
 Writing the security job is what forced the question of what "green" means for

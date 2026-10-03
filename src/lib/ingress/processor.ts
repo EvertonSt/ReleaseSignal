@@ -34,15 +34,89 @@ const idempotencyKeys = new Set<string>();
  * prefix. The prefix stays - the end-to-end suite matches on it, and it is
  * what makes a log line readable - but the body is now a UUID.
  */
+/**
+ * Retry an operation that lost a unique-constraint race.
+ *
+ * Changing find-then-create into `upsert` was necessary but not sufficient, and
+ * the database integration test showed exactly how insufficient: two concurrent
+ * ingests of the same repository still produced
+ *
+ *   Invalid `prisma.repository.upsert()` invocation:
+ *   Unique constraint failed on the fields: (`organizationId`,`fullName`)  P2002
+ *
+ * Prisma does not compile `upsert` to a native `INSERT ... ON CONFLICT` on
+ * PostgreSQL - it is still a lookup followed by a write - so the race moves
+ * rather than disappearing. The loser of the race fails even though the row it
+ * wanted now exists, which is what makes this safe to retry: the second attempt
+ * finds the row the first one wrote and succeeds.
+ *
+ * Bounded rather than infinite, because a genuine duplicate - two different
+ * keys colliding - must still surface as an error.
+ *
+ * Exported for testing: this is a claim about concurrency, and the only way to
+ * hold a claim about concurrency is to be able to exercise it.
+ */
+export async function withConflictRetry<T>(operation: () => Promise<T>, attempts = 3): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      const code = (error as { code?: unknown })?.code;
+      if (code !== "P2002" || attempt >= attempts) throw error;
+    }
+  }
+}
+
 function generateRunId(): string {
   return generateId("run");
 }
 
-export function isDuplicate(idempotencyKey: string): boolean {
-  // Check in-memory first
+/**
+ * Where a workflow's definition lives, derived from the name the CI system
+ * reported.
+ *
+ * Two bugs lived in the expression this replaces. The regex was `/s+/g`, so it
+ * replaced runs of the letter "s" rather than whitespace - a workflow called
+ * "tests" became "te-ts". And it appended `.yml` unconditionally, so a payload
+ * that already said `integration.yml` produced `integration.yml.yml`.
+ *
+ * Exported so the rule is tested directly; a path that is quietly wrong is
+ * harmless until someone tries to use it.
+ */
+export function workflowFilePath(workflow: string): string {
+  const trimmed = workflow.trim().toLowerCase();
+  // Strip the one prefix that is a genuine convention, rather than taking an
+  // arbitrary last path segment - "Release // Gate" is a name with punctuation
+  // in it, not a path, and splitting it would silently drop "Release".
+  const base = trimmed.replace(/^\.?github\/workflows\//, "");
+  const withoutExtension = base.replace(/\.(ya?ml)$/, "");
+  const slug = withoutExtension.replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return `.github/workflows/${slug || "workflow"}.yml`;
+}
+
+/**
+ * Is this idempotency key already recorded?
+ *
+ * It has to be ASYNC, and until the database integration test existed it was
+ * not. It used to be synchronous and check only the in-memory Set, on the
+ * reasoning that "the DB check is handled in processPayload" - but
+ * processPayload does not signal a duplicate, it RETURNS THE EXISTING RUN. So
+ * a retried CI webhook in production was answered `201` again, with the
+ * original run's data, and no error. The documented `409` only ever happened
+ * inside a single process's lifetime in demo mode.
+ *
+ * That is the whole reason the route's 409 existed on paper and not in
+ * production.
+ */
+export async function isDuplicate(idempotencyKey: string): Promise<boolean> {
   if (idempotencyKeys.has(idempotencyKey)) return true;
-  // In production, check DB
-  return false; // DB check handled in processPayload
+  if (isDemoMode()) return false;
+
+  const existing = await prisma.testRun.findUnique({
+    where: { idempotencyKey },
+    select: { id: true },
+  });
+  return existing !== null;
 }
 
 function computeGateDecision(
@@ -111,39 +185,46 @@ async function processToDatabase(
   const orgId = DEFAULT_ORG_ID;
   const now = new Date();
 
-  // 1. Find or create repository
+  // 1. Find or create repository.
+  //
+  // `upsert`, not find-then-create. Two CI pipelines reporting the same
+  // repository at the same moment both used to find nothing and both created,
+  // and one lost on the unique constraint with a 500. That is not a theoretical
+  // race: a push and its pull-request run routinely land together.
   const fullName = payload.repository;
   const repoName = fullName.split("/").pop() || fullName;
-  let repo = await prisma.repository.findFirst({
-    where: { organizationId: orgId, fullName },
-  });
-  if (!repo) {
-    repo = await prisma.repository.create({
-      data: {
+  const repo = await withConflictRetry(() =>
+    prisma.repository.upsert({
+      where: { organizationId_fullName: { organizationId: orgId, fullName } },
+      create: {
         organizationId: orgId,
         name: repoName,
         fullName,
         connected: true,
         integrationStatus: "connected",
       },
-    });
-  }
+      update: {},
+    })
+  );
 
-  // 2. Find or create workflow
+  // 2. Find or create workflow. Atomic for the same reason as the repository,
+  // which is why migration 1 adds the unique constraint this relies on.
   let workflowId: string | null = null;
-  if (payload.workflow) {
-    let wf = await prisma.workflow.findFirst({
-      where: { repositoryId: repo.id, name: payload.workflow },
-    });
-    if (!wf) {
-      wf = await prisma.workflow.create({
-        data: {
+  // Bound to a local: the narrowing `if (payload.workflow)` does not survive
+  // into the closure, and `payload.workflow` is `string | undefined`.
+  const workflowName = payload.workflow;
+  if (workflowName) {
+    const wf = await withConflictRetry(() =>
+      prisma.workflow.upsert({
+        where: { repositoryId_name: { repositoryId: repo.id, name: workflowName } },
+        create: {
           repositoryId: repo.id,
-          name: payload.workflow,
-          path: `.github/workflows/${payload.workflow.toLowerCase().replace(/s+/g, "-")}.yml`,
+          name: workflowName,
+          path: workflowFilePath(workflowName),
         },
-      });
-    }
+        update: {},
+      })
+    );
     workflowId = wf.id;
   }
 
@@ -423,16 +504,140 @@ async function processToDatabase(
 
 // ── Accessors ──────────────────────────────────────────────────────────────
 
-export function getRun(runId: string): StoredRun | undefined {
-  return runs.get(runId);
+/**
+ * What the read endpoints return.
+ *
+ * Deliberately NOT `StoredRun`: that type carries the full submitted payload,
+ * which only the in-memory store has. Deriving a fake payload to satisfy it
+ * would be inventing data, so the read model is declared separately and both
+ * stores project into it. The route already projected exactly these fields.
+ */
+export interface RunSummary {
+  id: string;
+  status: string;
+  gateDecision: string;
+  stats: {
+    total: number;
+    passed: number;
+    failed: number;
+    skipped: number;
+    flaky: number;
+    timedOut: number;
+  };
+  repository: string;
+  branch: string;
+  commit: string;
+  duration?: number;
+  receivedAt: Date;
+  processedAt?: Date;
 }
 
-export function getAllRuns(): StoredRun[] {
-  return Array.from(runs.values()).sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime());
+function summarize(stored: StoredRun): RunSummary {
+  return {
+    id: stored.id,
+    status: stored.status,
+    gateDecision: stored.gateDecision,
+    stats: stored.stats,
+    repository: stored.payload.repository,
+    branch: stored.payload.branch,
+    commit: stored.payload.commit,
+    duration: stored.duration,
+    receivedAt: stored.receivedAt,
+    processedAt: stored.processedAt,
+  };
 }
 
-export function getRunCount(): number {
-  return runs.size;
+/** The row shape the accessors select. Declared so Prisma's result stays typed. */
+type RunRow = {
+  id: string;
+  status: string;
+  gateDecision: string;
+  totalTests: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  flaky: number;
+  branch: string;
+  commitSha: string;
+  duration: number | null;
+  createdAt: Date;
+  finishedAt: Date | null;
+  repository: { fullName: string } | null;
+};
+
+function summarizeRow(row: RunRow): RunSummary {
+  return {
+    id: row.id,
+    // The schema stores a CI status; the read model reports ingestion state,
+    // which is always "processed" for a row that exists.
+    status: "processed",
+    gateDecision: row.gateDecision,
+    stats: {
+      total: row.totalTests,
+      passed: row.passed,
+      failed: row.failed,
+      skipped: row.skipped,
+      flaky: row.flaky,
+      // The schema has no timed-out counter; the ingestion payload's
+      // `timed_out` maps onto `failed` on the way in, so it is not invented
+      // back out here.
+      timedOut: 0,
+    },
+    repository: row.repository?.fullName ?? "",
+    branch: row.branch,
+    commit: row.commitSha,
+    duration: row.duration ?? undefined,
+    receivedAt: row.createdAt,
+    processedAt: row.finishedAt ?? undefined,
+  };
+}
+
+const RUN_SELECT = {
+  id: true,
+  status: true,
+  gateDecision: true,
+  totalTests: true,
+  passed: true,
+  failed: true,
+  skipped: true,
+  flaky: true,
+  branch: true,
+  commitSha: true,
+  duration: true,
+  createdAt: true,
+  finishedAt: true,
+  repository: { select: { fullName: true } },
+} as const;
+
+export async function getRun(runId: string): Promise<RunSummary | undefined> {
+  if (isDemoMode()) {
+    const stored = runs.get(runId);
+    return stored ? summarize(stored) : undefined;
+  }
+
+  const row = await prisma.testRun.findUnique({ where: { id: runId }, select: RUN_SELECT });
+  return row ? summarizeRow(row) : undefined;
+}
+
+export async function getAllRuns(limit = 20): Promise<RunSummary[]> {
+  if (isDemoMode()) {
+    return Array.from(runs.values())
+      .sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime())
+      .slice(0, limit)
+      .map(summarize);
+  }
+
+  const rows = await prisma.testRun.findMany({
+    orderBy: { createdAt: "desc" },
+    take: limit,
+    select: RUN_SELECT,
+  });
+  return rows.map(summarizeRow);
+}
+
+export async function getRunCount(): Promise<number> {
+  if (isDemoMode()) return runs.size;
+  return prisma.testRun.count();
 }
 
 export function clearRuns(): void {

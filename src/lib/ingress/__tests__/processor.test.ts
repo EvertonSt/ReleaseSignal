@@ -22,8 +22,16 @@ vi.mock("../../db", () => ({
   DEFAULT_ORG_ID: "org_demo_001",
 }));
 
-const { processPayload, isDuplicate, getRun, getAllRuns, getRunCount, clearRuns } =
-  await import("../processor");
+const {
+  processPayload,
+  isDuplicate,
+  getRun,
+  getAllRuns,
+  getRunCount,
+  clearRuns,
+  workflowFilePath,
+  withConflictRetry,
+} = await import("../processor");
 
 type TestCase = { status: TestResult["status"]; duration?: number };
 
@@ -115,11 +123,11 @@ describe("processPayload", () => {
 describe("idempotency", () => {
   it("records the key and reports later duplicates", async () => {
     await processPayload(payloadWith([{ status: "passed" }], { idempotencyKey: "k1" }));
-    expect(isDuplicate("k1")).toBe(true);
+    expect(await isDuplicate("k1")).toBe(true);
   });
 
-  it("does not report an unseen key as a duplicate", () => {
-    expect(isDuplicate("never-seen")).toBe(false);
+  it("does not report an unseen key as a duplicate", async () => {
+    expect(await isDuplicate("never-seen")).toBe(false);
   });
 
   it("still accepts a run with an empty payload suite boundary", async () => {
@@ -135,17 +143,33 @@ describe("accessors", () => {
     await processPayload(payloadWith([{ status: "passed" }]));
     await processPayload(payloadWith([{ status: "failed" }]));
 
-    expect(getRunCount()).toBe(2);
-    expect(getAllRuns()).toHaveLength(2);
+    expect(await getRunCount()).toBe(2);
+    expect(await getAllRuns()).toHaveLength(2);
   });
 
-  it("returns the stored run by id", async () => {
+  it("returns a summary for a stored run, carrying the fields the read API needs", async () => {
+    // The accessors return a RunSummary rather than the stored record, so this
+    // asserts the projection: repository, branch and commit come from the
+    // payload, and the stats survive intact.
     const stored = await processPayload(payloadWith([{ status: "passed" }]));
-    expect(getRun(stored.id)).toEqual(stored);
+    const summary = await getRun(stored.id);
+
+    expect(summary).toEqual({
+      id: stored.id,
+      status: stored.status,
+      gateDecision: stored.gateDecision,
+      stats: stored.stats,
+      repository: stored.payload.repository,
+      branch: stored.payload.branch,
+      commit: stored.payload.commit,
+      duration: stored.duration,
+      receivedAt: stored.receivedAt,
+      processedAt: stored.processedAt,
+    });
   });
 
-  it("returns undefined for an unknown id", () => {
-    expect(getRun("run_does_not_exist")).toBeUndefined();
+  it("returns undefined for an unknown id", async () => {
+    expect(await getRun("run_does_not_exist")).toBeUndefined();
   });
 
   it("orders runs newest first", async () => {
@@ -157,15 +181,123 @@ describe("accessors", () => {
     const newer = await processPayload(payloadWith([{ status: "passed" }]));
     newer.receivedAt = new Date(base);
 
-    expect(getAllRuns().map((r) => r.id)).toEqual([newer.id, older.id]);
+    expect((await getAllRuns()).map((r) => r.id)).toEqual([newer.id, older.id]);
+  });
+
+  it("respects the limit", async () => {
+    await processPayload(payloadWith([{ status: "passed" }]));
+    await processPayload(payloadWith([{ status: "passed" }]));
+
+    expect(await getAllRuns(1)).toHaveLength(1);
   });
 
   it("forgets everything on clear", async () => {
     await processPayload(payloadWith([{ status: "passed" }], { idempotencyKey: "k2" }));
     clearRuns();
 
-    expect(getRunCount()).toBe(0);
-    expect(getAllRuns()).toEqual([]);
-    expect(isDuplicate("k2")).toBe(false);
+    expect(await getRunCount()).toBe(0);
+    expect(await getAllRuns()).toEqual([]);
+    expect(await isDuplicate("k2")).toBe(false);
+  });
+});
+
+describe("withConflictRetry", () => {
+  /** The shape Prisma throws when a unique constraint is violated. */
+  const p2002 = Object.assign(new Error("Unique constraint failed"), { code: "P2002" });
+
+  it("returns the result without retrying when nothing conflicts", async () => {
+    let calls = 0;
+    const result = await withConflictRetry(() => {
+      calls++;
+      return Promise.resolve("ok");
+    });
+
+    expect(result).toBe("ok");
+    expect(calls).toBe(1);
+  });
+
+  it("retries once and succeeds when the first attempt loses a race", async () => {
+    // This is the exact production sequence: Prisma's `upsert` is a lookup
+    // followed by a write, so a concurrent ingest of the same repository makes
+    // the loser fail with P2002 even though the row it wanted now exists.
+    let calls = 0;
+    const result = await withConflictRetry(() => {
+      calls++;
+      return calls === 1 ? Promise.reject(p2002) : Promise.resolve("ok");
+    });
+
+    expect(result).toBe("ok");
+    expect(calls).toBe(2);
+  });
+
+  it("retries up to the bound and then surfaces the failure", async () => {
+    // A real duplicate - two genuinely different keys colliding - must not be
+    // retried forever.
+    let calls = 0;
+    await expect(
+      withConflictRetry(() => {
+        calls++;
+        return Promise.reject(p2002);
+      })
+    ).rejects.toThrow("Unique constraint failed");
+    expect(calls).toBe(3);
+  });
+
+  it("does not retry an error that is not a conflict", async () => {
+    let calls = 0;
+    const boom = Object.assign(new Error("connection reset"), { code: "P1001" });
+
+    await expect(
+      withConflictRetry(() => {
+        calls++;
+        return Promise.reject(boom);
+      })
+    ).rejects.toThrow("connection reset");
+    expect(calls).toBe(1);
+  });
+
+  it("does not retry an error that carries no code at all", async () => {
+    // The helper reads `.code` off whatever it catches, so an error from a
+    // layer that never set one has to pass straight through.
+    let calls = 0;
+    await expect(
+      withConflictRetry(() => {
+        calls++;
+        return Promise.reject(new Error("no code here"));
+      })
+    ).rejects.toThrow("no code here");
+    expect(calls).toBe(1);
+  });
+});
+
+describe("workflowFilePath", () => {
+  it("lowercases and adds the extension", () => {
+    expect(workflowFilePath("CI")).toBe(".github/workflows/ci.yml");
+  });
+
+  it("does not double the extension", () => {
+    // The expression this replaces appended ".yml" unconditionally, so a
+    // payload that already reported `integration.yml` produced
+    // `integration.yml.yml`.
+    expect(workflowFilePath("integration.yml")).toBe(".github/workflows/integration.yml");
+  });
+
+  it("accepts a full path from a CI provider", () => {
+    expect(workflowFilePath(".github/workflows/deploy.yaml")).toBe(".github/workflows/deploy.yml");
+  });
+
+  it("does not eat the letter s", () => {
+    // The original regex was `/s+/g`, which replaced runs of the letter "s"
+    // rather than whitespace: "tests" became "te-ts".
+    expect(workflowFilePath("tests")).toBe(".github/workflows/tests.yml");
+  });
+
+  it("turns whitespace and punctuation into single hyphens", () => {
+    expect(workflowFilePath("My Tests")).toBe(".github/workflows/my-tests.yml");
+    expect(workflowFilePath("  Release  //  Gate  ")).toBe(".github/workflows/release-gate.yml");
+  });
+
+  it("falls back rather than producing an empty filename", () => {
+    expect(workflowFilePath("   ")).toBe(".github/workflows/workflow.yml");
   });
 });

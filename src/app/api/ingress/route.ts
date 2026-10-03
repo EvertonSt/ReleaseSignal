@@ -70,8 +70,10 @@ export async function POST(request: NextRequest) {
 
     const payload = result.data;
 
-    // Check idempotency
-    if (payload.idempotencyKey && isDuplicate(payload.idempotencyKey)) {
+    // Check idempotency. This consults the database outside demo mode, so a
+    // retried webhook is rejected after a redeploy, not just within one
+    // process's lifetime.
+    if (payload.idempotencyKey && (await isDuplicate(payload.idempotencyKey))) {
       return NextResponse.json(
         {
           success: false,
@@ -114,6 +116,16 @@ export async function POST(request: NextRequest) {
       { status: 201 }
     );
   } catch (error) {
+    /*
+     * Logged, not just returned.
+     *
+     * The response body carries the message, so the caller can see it — but a
+     * caller cannot correlate a Prisma message with the request that caused it
+     * without also having the server log. The first version of this handler
+     * swallowed the error entirely, and the database integration test spent a
+     * whole CI run reporting "500" with nothing to act on.
+     */
+    console.error(`[api/ingress] ${requestId} failed`, error);
     return NextResponse.json(
       {
         success: false,
@@ -132,8 +144,13 @@ export async function POST(request: NextRequest) {
  * Query params:
  *   ?runId=<id> — Get a specific run
  *   ?limit=<n> — Limit results (default 20)
+ *
+ * Reads go to PostgreSQL outside demo mode. They used to read the in-memory
+ * Map unconditionally, which meant a real deployment answered `200` with an
+ * empty list no matter how much had been ingested — and nothing caught it,
+ * because every other test ran with demo mode on.
  */
-export function GET(request: NextRequest) {
+export async function GET(request: NextRequest) {
   const requestId = generateId("req");
   const { searchParams } = new URL(request.url);
 
@@ -141,47 +158,26 @@ export function GET(request: NextRequest) {
 
   // Get specific run
   if (runId) {
-    const run = getRun(runId);
+    const run = await getRun(runId);
     if (!run) {
       return NextResponse.json({ success: false, error: "Run not found", requestId }, { status: 404 });
     }
     return NextResponse.json({
       success: true,
-      data: {
-        id: run.id,
-        status: run.status,
-        gateDecision: run.gateDecision,
-        stats: run.stats,
-        repository: run.payload.repository,
-        branch: run.payload.branch,
-        commit: run.payload.commit,
-        duration: run.duration,
-        receivedAt: run.receivedAt,
-        processedAt: run.processedAt,
-      },
+      data: run,
       requestId,
     });
   }
 
   // List all runs
   const limit = Math.min(parseInt(searchParams.get("limit") || "20"), 100);
-  const allRuns = getAllRuns().slice(0, limit);
+  const [allRuns, total] = await Promise.all([getAllRuns(limit), getRunCount()]);
 
   return NextResponse.json({
     success: true,
     data: {
-      runs: allRuns.map((run) => ({
-        id: run.id,
-        status: run.status,
-        gateDecision: run.gateDecision,
-        stats: run.stats,
-        repository: run.payload.repository,
-        branch: run.payload.branch,
-        commit: run.payload.commit,
-        duration: run.duration,
-        receivedAt: run.receivedAt,
-      })),
-      total: getRunCount(),
+      runs: allRuns,
+      total,
       showing: allRuns.length,
     },
     requestId,
