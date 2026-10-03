@@ -1,0 +1,73 @@
+# ── Dependency updates ───────────────────────────────────────────────────────
+# The reason this file exists: the critical advisory that prompted the framework
+# upgrade in docs/decisions/0005-patch-known-vulnerabilities.md was found by
+# hand, while writing a CI job. That is a lucky way to find a remote code
+# execution bug in the framework the whole application runs on.
+#
+# Dependabot watches the same lockfile CI audits, and opens a pull request
+# rather than editing a branch, so the gate decides what lands.
+
+version: 2
+
+updates:
+  # pnpm is not a separate ecosystem here: Dependabot reads pnpm-lock.yaml
+  # through the "npm" ecosystem.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: America/Sao_Paulo
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "build(deps)"
+    # One grouped pull request per ecosystem minor line rather than one per
+    # package. Twenty transitive bumps are unreviewable; a single coherent
+    # upgrade of the things this repository actually depends on is reviewable.
+    groups:
+      production-dependencies:
+        applies-to: version-updates
+        dependency-type: production
+        patterns:
+          - "*"
+      development-dependencies:
+        applies-to: version-updates
+        dependency-type: development
+        patterns:
+          - "*"
+      nextjs:
+        applies-to: version-updates
+        patterns:
+          - "next"
+          - "eslint-config-next"
+      prisma:
+        applies-to: version-updates
+        patterns:
+          - "prisma"
+          - "@prisma/client"
+    ignore:
+      # 5.0.0-beta.x of next-auth: every upgrade moves the API underneath it,
+      # and a beta is not something to accept automatically on a repository
+      # whose authentication is under review. Upgrade it deliberately.
+      - dependency-name: "next-auth"
+        update-types: ["version-update:semver-major"]
+
+  # Every action in .github/workflows is pinned to a commit SHA. Dependabot
+  # understands pinned actions and opens pull requests that move the SHA and
+  # update the trailing version comment - which is the only automated way those
+  # pins stay current, because nothing else notices a stale SHA.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: America/Sao_Paulo
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: "ci"

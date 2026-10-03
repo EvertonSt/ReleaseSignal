@@ -1,0 +1,102 @@
+# ── Database integration ─────────────────────────────────────────────────────
+# The production branch of the ingestion pipeline, against a real database.
+
+name: DB integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: true
+  NODE_VERSION: "22"
+  PNPM_VERSION: "11.20.0"
+
+jobs:
+  prisma:
+    name: ingestion against PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    # A real database, not a mock. The behaviour under test - create Repository,
+    # Workflow, TestRun, TestSuite and TestCase rows, then honour an idempotency
+    # key on read-back - is exactly what a mocked Prisma client cannot attest to,
+    # because the mock would be asserting its own configuration rather than the
+    # schema's constraints.
+    #
+    # Trust authentication, and no password anywhere. This container listens on
+    # the runner's loopback interface, exists for the length of one job and is
+    # destroyed with the runner; a password here would be a credential committed
+    # to a public repository in exchange for protecting nothing. A deployment's
+    # real DATABASE_URL is a different matter and is set as a secret there.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: releasesignal
+          POSTGRES_DB: releasesignal_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0c17529a66aca453f9227af23103ed11469b1e47 # v4.0.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Configure the database URL
+        run: echo "DATABASE_URL=postgresql://releasesignal@localhost:5432/releasesignal_test" >> "$GITHUB_ENV"
+
+      # Applied from the checked-in migration, so a migration that no longer
+      # matches the schema fails here rather than being discovered by whoever
+      # deploys next.
+      - name: Apply migrations
+        run: pnpm db:deploy
+
+      - name: Confirm the migration history is fully applied
+        run: pnpm exec prisma migrate status
+
+      # scripts/e2e-server.mjs in `db` mode migrates, seeds, builds the non-demo
+      # bundle and serves it against this database. It is the same script the
+      # local suite uses, so the two cannot drift.
+      - name: Ingestion integration tests
+        env:
+          E2E_MODE: db
+        run: pnpm exec playwright test --project=db-integration
+
+      - name: Upload failure artefacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: db-integration-report
+          path: playwright-report/
+          retention-days: 7

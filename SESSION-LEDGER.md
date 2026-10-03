@@ -157,6 +157,42 @@ something the project previously had no way to do.
 
 ---
 
+## Closing the untested branch, and what writing SECURITY.md turned up
+
+The production ingestion branch — the one that writes through Prisma instead of
+into an in-memory Map — had no test at all, and it is the branch a deployment
+runs. CI now runs it against a real PostgreSQL service container, applying the
+checked-in migration first, so the migration executes on every run rather than
+only being reviewed. The assertion that matters is database-backed idempotency:
+the demo path keeps its keys in a `Set` for the life of the process, so it can
+never show that a retried webhook is still rejected after a redeploy.
+
+The `db-integration` Playwright project is declared only when `DATABASE_URL` is
+present rather than being declared and skipped. A permanent "skipped" line in
+every local run is how people learn to ignore skips.
+
+The container uses `trust` authentication and no password anywhere. It listens on
+the runner's loopback interface and dies with the runner; a password there would
+be a credential committed to a public repository in exchange for protecting
+nothing.
+
+Writing `SECURITY.md` surfaced two things worth more than the document:
+
+**The rate limiter is wired to nothing.** `checkRateLimit` is referenced only by
+its own module and its own tests. The token bucket is fully tested and no route
+calls it, so `/api/ingress` is unthrottled and a leaked key is unlimited. The
+README listed it as a security primitive — which is true, since this repository
+owns it — and both the README and the policy now say plainly that owning a
+primitive is not the same as running it.
+
+**No contact email existed anywhere in the kit**, and the obvious move was to
+write a plausible one into a security policy. A security document is the worst
+possible place to invent an address: it routes real vulnerability reports to
+whoever that address belongs to. Reporting now goes through GitHub's private
+vulnerability reporting, which needs no address to be correct.
+
+---
+
 ## The security finding that came out of writing CI
 
 Writing the security job is what forced the question of what "green" means for

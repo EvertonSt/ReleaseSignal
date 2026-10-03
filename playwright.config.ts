@@ -1,4 +1,4 @@
-import { defineConfig, devices } from "@playwright/test";
+import { defineConfig, devices, type Project } from "@playwright/test";
 
 /**
  * The e2e suite runs against a production build, not `next dev`.
@@ -18,6 +18,28 @@ const BASE_URL = process.env.BASE_URL ?? `http://127.0.0.1:${PORT}`;
  * runs in its own project rather than five times inside the browser projects.
  */
 const AUTH_SPEC = /ingestion-auth\.spec\.ts/;
+
+/** The spec that needs a real PostgreSQL instance. */
+const DB_SPEC = /ingestion-db\.spec\.ts/;
+
+/**
+ * The database project is added only when DATABASE_URL is present, rather than
+ * being declared and skipped. A declared-but-skipped project leaves a permanent
+ * "skipped" line in every local run, which trains people to ignore skips; an
+ * absent project simply is not there.
+ */
+const projects: Project[] = [
+  { name: "chromium", use: { ...devices["Desktop Chrome"] }, testIgnore: [AUTH_SPEC, DB_SPEC] },
+  { name: "firefox", use: { ...devices["Desktop Firefox"] }, testIgnore: [AUTH_SPEC, DB_SPEC] },
+  { name: "mobile-chrome", use: { ...devices["Pixel 7"] }, testIgnore: [AUTH_SPEC, DB_SPEC] },
+  { name: "mobile-safari", use: { ...devices["iPhone 14"] }, testIgnore: [AUTH_SPEC, DB_SPEC] },
+  { name: "tablet", use: { ...devices["iPad (gen 7)"] }, testIgnore: [AUTH_SPEC, DB_SPEC] },
+  { name: "api-security", testMatch: AUTH_SPEC },
+];
+
+if (process.env.DATABASE_URL) {
+  projects.push({ name: "db-integration", testMatch: DB_SPEC });
+}
 
 export default defineConfig({
   testDir: "./e2e",
@@ -41,20 +63,7 @@ export default defineConfig({
     navigationTimeout: 20_000,
   },
 
-  projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] }, testIgnore: AUTH_SPEC },
-    { name: "firefox", use: { ...devices["Desktop Firefox"] }, testIgnore: AUTH_SPEC },
-    { name: "mobile-chrome", use: { ...devices["Pixel 7"] }, testIgnore: AUTH_SPEC },
-    { name: "mobile-safari", use: { ...devices["iPhone 14"] }, testIgnore: AUTH_SPEC },
-    { name: "tablet", use: { ...devices["iPad (gen 7)"] }, testIgnore: AUTH_SPEC },
-    {
-      // The ingestion authorization spec makes no browser assertions - it
-      // drives the endpoint over HTTP against two non-demo servers. Running it
-      // in five browsers would be five times the wall clock for one result.
-      name: "api-security",
-      testMatch: AUTH_SPEC,
-    },
-  ],
+  projects,
 
   webServer: {
     // Builds the demo bundle AND a non-demo bundle, then serves three servers.

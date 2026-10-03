@@ -79,13 +79,13 @@ arithmetic comparison.
 
 ### Security primitives that are actually tested
 
-| Module                                                    | What it does                                                                      |
-| --------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| [`rate-limit.ts`](src/lib/security/rate-limit.ts)         | Token bucket per key, with a refill ceiling and `Retry-After`                     |
-| [`webhook-verify.ts`](src/lib/security/webhook-verify.ts) | HMAC-SHA256 with `timingSafeEqual`; malformed digests return `false`, never throw |
-| [`secrets.ts`](src/lib/security/secrets.ts)               | Redaction of 17 credential shapes before anything is logged                       |
-| [`auth.ts`](src/lib/ingress/auth.ts)                      | Bearer token on the CI write endpoint, constant-time, **fails closed**            |
-| [`body.ts`](src/lib/api/body.ts)                          | One typed reader for every route body                                             |
+| Module                                                    | What it does                                                                                 |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| [`rate-limit.ts`](src/lib/security/rate-limit.ts)         | Token bucket per key, with a refill ceiling and `Retry-After` — **not yet wired to a route** |
+| [`webhook-verify.ts`](src/lib/security/webhook-verify.ts) | HMAC-SHA256 with `timingSafeEqual`; malformed digests return `false`, never throw            |
+| [`secrets.ts`](src/lib/security/secrets.ts)               | Redaction of 17 credential shapes before anything is logged                                  |
+| [`auth.ts`](src/lib/ingress/auth.ts)                      | Bearer token on the CI write endpoint, constant-time, **fails closed**                       |
+| [`body.ts`](src/lib/api/body.ts)                          | One typed reader for every route body                                                        |
 
 `POST /api/ingress` is the one write endpoint a third party can reach, so it
 requires `Authorization: Bearer $INGEST_API_KEY`, compared in constant time over
@@ -299,6 +299,10 @@ $INGEST_API_KEY`, compares it in constant time, and refuses to run at all when
 
 **Known limits worth naming**
 
+- **Rate limiting is written and tested but not wired to any route.** The token
+  bucket has a full suite; nothing calls it yet. Named here because the table
+  above lists it as a primitive this repository owns, and owning it is not the
+  same as running it.
 - **A demo build is not a production build.** `NEXT_PUBLIC_DEMO_MODE` is inlined
   at build time, so the ingestion endpoint's auth check is compiled out of a
   demo build and cannot be re-enabled by restarting the server. Every
@@ -321,6 +325,13 @@ Decisions with a reason behind them live in
 [`docs/decisions/`](docs/decisions). The conventions this repository follows are
 written down in [`docs/WORKING-AGREEMENT.md`](docs/WORKING-AGREEMENT.md), and
 the work log is in [`SESSION-LEDGER.md`](SESSION-LEDGER.md).
+
+---
+
+## Security
+
+[`SECURITY.md`](SECURITY.md) documents the ingestion authorization model, the
+demo-build hazard, the known limitations and how to report a vulnerability.
 
 ---
 

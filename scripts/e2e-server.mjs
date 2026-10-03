@@ -141,6 +141,49 @@ process.on("SIGINT", () => shutdown(0));
 process.on("SIGTERM", () => shutdown(0));
 
 async function main() {
+  /*
+   * Database mode: one non-demo server pointed at a real PostgreSQL instance.
+   *
+   * It exists because the production branch of the ingestion pipeline - the one
+   * that writes through Prisma rather than into the in-memory map - had no test
+   * of any kind. That branch is what a deployment actually runs, and it is the
+   * branch that decides whether an idempotency key is honoured across restarts.
+   */
+  if (process.env.E2E_MODE === "db") {
+    if (!process.env.DATABASE_URL) {
+      throw new Error("E2E_MODE=db requires DATABASE_URL");
+    }
+
+    log("applying migrations");
+    await run("pnpm", ["exec", "prisma", "migrate", "deploy"], {}, "migrate");
+
+    log("seeding");
+    await run("pnpm", ["exec", "tsx", "prisma/seed.ts"], {}, "seed");
+
+    log("building non-demo bundle");
+    await run(
+      "pnpm",
+      ["exec", "next", "build"],
+      { NEXT_PUBLIC_DEMO_MODE: "false", NEXT_DIST_DIR: NON_DEMO_DIST },
+      "build:nodemo"
+    );
+
+    log(`database server starting on :${PORT_DEMO}`);
+    startServer(
+      PORT_DEMO,
+      {
+        NEXT_PUBLIC_DEMO_MODE: "false",
+        NEXT_DIST_DIR: NON_DEMO_DIST,
+        INGEST_API_KEY: TEST_KEY,
+        AUTH_SECRET: "e2e-auth-secret-not-used-by-these-tests",
+      },
+      "db"
+    );
+    await waitFor(`http://127.0.0.1:${PORT_DEMO}/login`, `database server :${PORT_DEMO}`);
+    log(`ready — database server :${PORT_DEMO}`);
+    return;
+  }
+
   log("building demo bundle");
   await run("pnpm", ["exec", "next", "build"], { NEXT_PUBLIC_DEMO_MODE: "true" }, "build:demo");
 
