@@ -1,0 +1,92 @@
+#!/usr/bin/env sh
+# Attribution guard - the owner is the sole author of every commit.
+#
+# WHY THIS IS STRUCTURAL, NOT A DENYLIST
+# An earlier version of this guard matched a FIXED LIST of tool names. That is
+# exactly how two commits shipped with an AI co-author trailer while the guard
+# sat in the repo looking protective: the tool's name was simply not on the
+# list yet. A denylist of tools is a list that is always out of date, and it
+# fails silently against the next new tool.
+#
+# So the rules below are STRUCTURAL - they describe the SHAPE of an attribution
+# claim, not which tool made it:
+#   1. any Co-Authored-by / Signed-off-by trailer that is not the owner
+#   2. any "generated/created/written/assisted by ..." attribution phrase
+#   3. any co-author-shaped identity line naming a non-owner
+#   4. any robot/bot emoji
+#   5. any known AI vendor name anywhere in the message (second layer, for
+#      phrasings the structural rules cannot see)
+#
+# A new tool, a new vendor, a new phrasing: the structural rules still fire.
+# Keep this file. A guard that can be silently bypassed is not a guard.
+
+f="$1"
+[ -r "$f" ] || exit 0
+
+# The owner's own identity. A co-author trailer naming the owner is redundant
+# noise, but it is not an AI claim, so it is the one allowed exception.
+owner_re='Everton(St)?([[:space:]]+S\.?[[:space:]]+Andrade)?|46034541\+EvertonSt'
+
+fail() {
+  echo "commit-msg: BLOCKED by owner law - no AI attribution in commits." >&2
+  echo "  $1" >&2
+  echo "  The owner is the sole author. Remove the trailer/stamp and commit again." >&2
+  echo "  Policy: C:/Portfolio Projects/GUARDRAILS.md and authorship-protection.md" >&2
+  echo "  (see also FIELD-LESSONS.md section 14)" >&2
+  exit 1
+}
+
+# 1. Co-Authored-by / Signed-off-by naming anyone who is not the owner.
+if grep -qiE '^\s*(co-?authored-by|signed-off-by)\s*:' "$f"; then
+  if ! grep -qiE "^\s*(co-?authored-by|signed-off-by)\s*:\s*.*($owner_re)" "$f"; then
+    fail "A co-author trailer names someone other than the owner."
+  fi
+fi
+
+# 2. Attribution phrases. These must be ATTRIBUTION-shaped, not ordinary prose.
+#    "the bundle is built by the pipeline" is a fact about CI, not a claim that
+#    a tool wrote the code - so the verb must sit on a line that reads like a
+#    credit, and the object must be a tool/agent/AI rather than a noun phrase.
+#    Kept tight on purpose: a guard that blocks ordinary English gets bypassed
+#    with --no-verify within a week, which is a worse outcome than missing a
+#    phrasing.
+if grep -qiE '^[^a-z]*(generated|created|written|authored|co-?written|co-?authored|produced|powered|assisted|helped)[[:space:]]+(with|by)[[:space:]]+(an?[[:space:]]+)?(ai|llm|agent|assistant|bot|model|tool|codex|chatgpt|claude|copilot|gemini|cursor|codebuff|freebuff|internal tool)' "$f"; then
+  fail "The message credits the work to a tool or agent."
+fi
+if grep -qiE '(ai-?assisted|ai-?generated|ai-?written|vibe-?cod(ed|ing)|machine-?written|agent-?written|written by (an?[[:space:]]+)?(coding[[:space:]]+)?(ai|llm|agent|assistant|bot|model)|co-?written by (an?[[:space:]]+)?(coding[[:space:]]+)?(ai|llm|agent|assistant|bot|model))' "$f"; then
+  fail "The message describes the work as AI-generated."
+fi
+
+# 3. A co-author trailer whose value is an agent-shaped identity, even if the
+#    trailer name is unusual. Catches "Generated-by:" / "Author:" / "Helper:"
+#    style trailers that name a non-human without using the word "AI".
+#    The owner exception is re-applied per line: a message may legitimately
+#    carry the owner's trailer while a DIFFERENT line names a non-owner, so
+#    "any owner line exists" is not sufficient - the offending line must itself
+#    be checked.
+if grep -qiE '^\s*(co-?authored-by|generated-by|generated-with|created-by|authored-by|written-by|produced-by|assisted-by|helper|agent)\s*:' "$f"; then
+  offenders=$(grep -iE '^\s*(co-?authored-by|generated-by|generated-with|created-by|authored-by|written-by|produced-by|assisted-by|helper|agent)\s*:' "$f" \
+    | grep -ivE "($owner_re)")
+  if [ -n "$offenders" ]; then
+    fail "An authorship-style trailer names someone other than the owner."
+  fi
+fi
+
+# 4. Robot / bot emoji anywhere.
+if grep -q '🤖' "$f" || grep -qP '\x{1F916}|\x{1F47B}|\x{1F9D9}' "$f" 2>/dev/null; then
+  fail "The message contains a robot/bot emoji stamp."
+fi
+
+# 5. Second layer: a vendor name only counts when it appears in an
+#    ATTRIBUTION context - a credit line, a trailer, or a phrase next to
+#    wrote/generated/assisted. A commit that merely mentions a tool by name
+#    (documenting a script, quoting a CLI flag, naming a config file) is
+#    legitimate and must pass.
+if grep -qiE '(co-?authored-by|generated|created|written|authored|assisted|produced|powered|helped|reviewed|built|thanks to|credit)[^\n]{0,80}\b(codebuff|freebuff|chatgpt|openai|gpt-[0-9]|claude|anthropic|copilot|gemini|codex|devin|antigravity|workbuddy|mimo|hermes|opencode|windsurf|tabnine|codeium|qwen|deepseek|llama|mistral|cohere|grok|perplexity|aider|cody|replit|bolt\.new|v0\.dev|lovable)\b' "$f"; then
+  fail "The message attributes the work to a named AI tool."
+fi
+if grep -qiE '\b(codebuff|freebuff)\b' "$f"; then
+  fail "The message names this agent tooling."
+fi
+
+exit 0

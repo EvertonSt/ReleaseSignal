@@ -1,0 +1,42 @@
+# Dependencies
+node_modules
+.pnpm-store
+
+# Build outputs
+.next
+.next-dev
+out
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Docker files (don't send to context)
+docker-compose*.yml
+Dockerfile*
+docker-entrypoint.sh
+
+# Documentation
+*.md
+docs/
+LICENSE
+
+# Development files
+.git
+.gitignore
+.vscode
+.idea
+*.log
+coverage/
+playwright-report/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files
+tests/
+__tests__/
+*.test.*
+*.spec.*

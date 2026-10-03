@@ -1,0 +1,257 @@
+# ── ReleaseSignal CI ────────────────────────────────────────────────────────
+# Five jobs, ordered by how fast they fail. Nothing here needs write access to
+# the repository, so the token gets the narrowest scope that still works.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege by default. No job in this workflow pushes, comments or
+# creates releases, so nothing needs more than read.
+permissions:
+  contents: read
+
+# A newer push supersedes the run in flight for the same ref. For a test suite
+# that is correct - only the newest commit is worth testing - and it stops
+# Actions minutes accumulating on a queue nobody is watching.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: true
+  NODE_VERSION: "22"
+  # pnpm resolves from the corepack-ready `packageManager` field, so the local
+  # toolchain and CI cannot drift apart. `pnpm/action-setup` still runs first to
+  # put pnpm on PATH at that exact version.
+  PNPM_VERSION: "11.20.0"
+
+jobs:
+  # ── 1. Static checks ──────────────────────────────────────────────────────
+  # The cheapest job, and the one everything else waits on. A type error or a
+  # lint problem should never cost a 14-minute browser run to discover.
+  quality:
+    name: quality (format, lint, typecheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0c17529a66aca453f9227af23103ed11469b1e47 # v4.0.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      # --frozen-lockfile is the point of the step: it fails when the lockfile
+      # and package.json disagree instead of silently resolving a different
+      # tree than the one that was tested locally.
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Format check
+        run: pnpm format:check
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type check
+        run: pnpm typecheck
+
+  # ── 2. Unit tests ─────────────────────────────────────────────────────────
+  unit:
+    name: unit (vitest + coverage floor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: quality
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0c17529a66aca453f9227af23103ed11469b1e47 # v4.0.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The coverage floors live in vitest.config.ts and fail the run there, so
+      # this step cannot report success while coverage sits below the threshold.
+      - name: Unit tests
+        run: pnpm test:unit:coverage
+
+      - name: Upload coverage summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7
+          if-no-files-found: warn
+
+  # ── 3. End-to-end ─────────────────────────────────────────────────────────
+  # Runs against a production build, not `next dev`. The dev server compiles
+  # routes on demand, caches differently and skips prerendering, so a suite that
+  # passes against it is testing a different application than the one shipped.
+  e2e:
+    name: e2e (Playwright, 5 projects)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    needs: quality
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0c17529a66aca453f9227af23103ed11469b1e47 # v4.0.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # All three engines, not just one. The projects are chromium, firefox,
+      # mobile-chrome, mobile-safari and tablet - and the iPhone descriptor
+      # resolves to WebKit, so a chromium-only install silently skips a fifth of
+      # the suite.
+      - name: Install browsers
+        run: pnpm exec playwright install --with-deps chromium firefox webkit
+
+      # playwright.config.ts builds and serves the app itself. The build has to
+      # happen here rather than in the quality job: a Next.js build is not a
+      # portable artefact, and the 20 MB of platform-specific binaries it pulls
+      # in make passing it between runners more fragile than rebuilding.
+      - name: End-to-end tests
+        run: pnpm test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  # ── 4. Repository readiness ───────────────────────────────────────────────
+  # The gates that make this repository a repository rather than a directory of
+  # files: no leaked credentials, no dead links, no co-authorship, and a build
+  # whose artefacts match what the code claims.
+  readiness:
+    name: readiness (secrets, links, attribution, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: quality
+    steps:
+      - name: Checkout
+        # Full history on purpose. The attribution audit walks every commit
+        # reachable from any ref, and a shallow clone cannot see the ones before
+        # the cut - it would report a clean repository while the
+        # trailer-carrying commits are still fetchable by SHA.
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0c17529a66aca453f9227af23103ed11469b1e47 # v4.0.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Secret scan
+        run: pnpm verify:secrets
+
+      - name: Link check
+        run: pnpm verify:links
+
+      # The rule this repository lives by: the owner is the sole author of
+      # every commit. This fails the build rather than warning.
+      - name: Attribution audit (tree, history, authorship)
+        run: pnpm verify:attribution
+
+      # verify-build inspects the real output, so the build has to exist first.
+      - name: Production build
+        run: pnpm build
+        env:
+          NEXT_PUBLIC_DEMO_MODE: "true"
+
+      - name: Build artefact verification
+        run: pnpm verify:build
+
+  # ── 5. Security ───────────────────────────────────────────────────────────
+  # Two audits at two thresholds rather than one blanket check, because a red
+  # light that fires constantly is a red light people learn to ignore. The
+  # production tree is held to high; the development tree is watched at
+  # critical, so a real problem in shipped code fails the build while a
+  # dev-only measurement tool does not.
+  security:
+    name: security (dependency audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: quality
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0c17529a66aca453f9227af23103ed11469b1e47 # v4.0.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Dependency audit, production (fail on high or critical)
+        run: pnpm audit --prod --audit-level=high
+
+      - name: Dependency audit, development (fail on critical)
+        run: pnpm audit --audit-level=critical

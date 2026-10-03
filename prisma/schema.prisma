@@ -1,0 +1,468 @@
+// ── ReleaseSignal Data Model ─────────────────────────────────────────────────
+// Multi-tenant SaaS schema for QA intelligence and release-risk management.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Organization & Users ─────────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  avatar    String?
+  githubId  String?  @unique
+  password  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships Membership[]
+  auditEvents AuditEvent[]
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  logo      String?
+  plan      String   @default("custom")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  settings        OrgSettings?
+  members         Membership[]
+  repos           Repository[]
+  testRuns        TestRun[]
+  gates           QualityGate[]
+  reports         Report[]
+  auditLog        AuditEvent[]
+  apiKeys         ApiKey[]
+  integrations    Integration[]
+  failureClusters FailureCluster[]
+  flakyTests      FlakyTest[]
+  pullRequestChecks PullRequestCheck[]
+}
+
+model OrgSettings {
+  id                 String   @id @default(cuid())
+  organizationId     String   @unique
+  timezone           String   @default("UTC")
+  defaultBranch      String   @default("main")
+  qualityGateRequired Boolean @default(true)
+  aiEnabled          Boolean @default(true)
+  aiProvider         String?
+  aiModel            String?
+  dataRetentionDays  Int      @default(90)
+  branding           Json?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model Membership {
+  id             String   @id @default(cuid())
+  userId         String
+  organizationId String
+  role           String   @default("member")
+  createdAt      DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+}
+
+// ── Repository & Integration ─────────────────────────────────────────────────
+
+model Repository {
+  id               String   @id @default(cuid())
+  organizationId   String
+  name             String
+  fullName         String
+  defaultBranch    String   @default("main")
+  language         String?
+  connected        Boolean  @default(false)
+  integrationStatus String  @default("pending")
+  lastSyncAt       DateTime?
+  githubAppId      String?
+  createdAt        DateTime @default(now())
+
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workflows         Workflow[]
+  testRuns          TestRun[]
+  performanceMetrics PerformanceMetric[]
+
+  @@unique([organizationId, fullName])
+  @@index([organizationId])
+}
+
+model Workflow {
+  id           String  @id @default(cuid())
+  repositoryId String
+  name         String
+  path         String
+  enabled      Boolean @default(true)
+  githubId     String?
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  testRuns   TestRun[]
+
+  @@index([repositoryId])
+}
+
+model Integration {
+  id             String   @id @default(cuid())
+  organizationId String
+  type           String
+  status         String   @default("pending")
+  config         Json     @default("{}")
+  lastSyncAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@index([organizationId])
+}
+
+// ── Test Runs & Results ──────────────────────────────────────────────────────
+
+model TestRun {
+  id             String   @id @default(cuid())
+  organizationId String
+  repositoryId   String
+  workflowId     String?
+  externalId     String?
+  branch         String
+  commitSha      String
+  commitMessage  String?
+  prNumber       Int?
+  prTitle        String?
+  prAuthor       String?
+  environment    String   @default("ci")
+  status         String   @default("queued")
+  startedAt      DateTime
+  finishedAt     DateTime?
+  duration       Int?
+  totalTests     Int      @default(0)
+  passed         Int      @default(0)
+  failed         Int      @default(0)
+  skipped        Int      @default(0)
+  flaky          Int      @default(0)
+  retried        Int      @default(0)
+  gateDecision   String   @default("pending")
+  browser        String?
+  os             String?
+  trigger        String   @default("push")
+  actor          String?
+  idempotencyKey String?  @unique
+  createdAt      DateTime @default(now())
+
+  organization   Organization?    @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  repository     Repository?      @relation(fields: [repositoryId], references: [id], onDelete: SetNull)
+  workflow       Workflow?        @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  testSuites     TestSuite[]
+  failureClusters FailureCluster[] @relation("RunFailures")
+
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([repositoryId, branch])
+  @@index([status])
+  @@index([gateDecision])
+}
+
+model TestSuite {
+  id         String  @id @default(cuid())
+  testRunId  String
+  name       String
+  file       String?
+  totalTests Int     @default(0)
+  passed     Int     @default(0)
+  failed     Int     @default(0)
+  skipped    Int     @default(0)
+  duration   Int?
+
+  testRun TestRun    @relation(fields: [testRunId], references: [id], onDelete: Cascade)
+  cases   TestCase[]
+}
+
+model TestCase {
+  id            String  @id @default(cuid())
+  testSuiteId   String
+  title         String
+  fullTitle     String
+  status        String
+  duration      Int?
+  retries       Int     @default(0)
+  retryResults  Json?
+  errorMessage  String?
+  stackTrace    String?
+  locator       String?
+  browser       String?
+  screenshotUrl String?
+  videoUrl      String?
+  traceUrl      String?
+  logs          String?
+
+  testSuite TestSuite @relation(fields: [testSuiteId], references: [id], onDelete: Cascade)
+}
+
+// ── Failure Intelligence ─────────────────────────────────────────────────────
+
+model FailureCluster {
+  id              String   @id @default(cuid())
+  organizationId  String
+  runId           String?
+  name            String
+  signature       String
+  classification  String   @default("unknown")
+  confidence      Float    @default(0)
+  severity        String   @default("medium")
+  errorMessage    String
+  stackTrace      String?
+  locator         String?
+  affectedTests   Int      @default(0)
+  affectedRuns    Int      @default(0)
+  occurrences     Int      @default(0)
+  firstSeen       DateTime @default(now())
+  lastSeen        DateTime @default(now())
+  trend           String   @default("stable")
+  aiExplanation   String?
+  suggestedAction String?
+  triageStatus    String   @default("pending")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  triage       TriageDecision?
+  relatedRun   TestRun?        @relation("RunFailures", fields: [runId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, classification])
+  @@index([organizationId, severity])
+}
+
+model TriageDecision {
+  id               String   @id @default(cuid())
+  failureClusterId String   @unique
+  classification   String
+  reason           String
+  decidedBy        String
+  decidedAt        DateTime @default(now())
+  isOverride       Boolean  @default(false)
+  auditHistory     Json?
+
+  failureCluster FailureCluster @relation(fields: [failureClusterId], references: [id], onDelete: Cascade)
+}
+
+// ── Flaky Tests ──────────────────────────────────────────────────────────────
+
+// ── Flaky Tests ──────────────────────────────────────────────────────────────
+
+model FlakyTest {
+  id                   String    @id @default(cuid())
+  organizationId       String
+  title                String
+  fullTitle            String
+  repository           String
+  suite                String?
+  flakeRate            Float     @default(0)
+  retryFrequency       Int       @default(0)
+  totalRuns            Int       @default(0)
+  flakyRuns            Int       @default(0)
+  lastSeen             DateTime  @default(now())
+  trend                String    @default("stable")
+  team                 String?
+  owner                String?
+  status               String    @default("active")
+  quarantineExpiry     DateTime?
+  quarantineApprovedBy String?
+  quarantineReason     String?
+  suggestedRemediation String?
+  failureExamples      Json?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([organizationId, flakeRate(sort: Desc)])
+}
+
+// ── Quality Gates ────────────────────────────────────────────────────────────
+
+model QualityGate {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  enabled        Boolean  @default(true)
+  evaluatedAt    DateTime?
+  lastDecision   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  rules        QualityGateRule[]
+  evaluations  GateEvaluation[]
+
+  @@index([organizationId])
+}
+
+model QualityGateRule {
+  id          String  @id @default(cuid())
+  gateId      String
+  type        String
+  condition   String
+  threshold   Float
+  severity    String  @default("medium")
+  enabled     Boolean @default(true)
+  description String
+
+  gate QualityGate @relation(fields: [gateId], references: [id], onDelete: Cascade)
+
+  @@index([gateId])
+}
+
+model GateEvaluation {
+  id          String   @id @default(cuid())
+  gateId      String
+  decision    String
+  summary     String
+  ruleResults Json
+  evaluatedAt DateTime @default(now())
+
+  gate QualityGate @relation(fields: [gateId], references: [id], onDelete: Cascade)
+
+  @@index([gateId, evaluatedAt(sort: Desc)])
+}
+
+model PullRequestCheck {
+  id                String   @id @default(cuid())
+  organizationId    String
+  pullRequestNumber Int
+  repositoryId      String
+  branch            String
+  commitSha         String
+  title             String
+  author            String
+  url               String
+  gateDecision      String   @default("pending")
+  overallScore      Float    @default(0)
+  riskSummary       Json?
+  aiExplanation     String?
+  evidenceLinks     Json?
+  approvalHistory   Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, pullRequestNumber])
+  @@index([repositoryId, branch])
+}
+
+model PerformanceMetric {
+  id            String   @id @default(cuid())
+  repositoryId  String
+  date          DateTime
+  branch        String   @default("main")
+  commitSha     String?
+  p50Duration   Int
+  p95Duration   Int
+  p99Duration   Int
+  totalDuration Int
+  testCount     Int
+  budget        Int
+  withinBudget  Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@index([repositoryId, date(sort: Desc)])
+}
+
+model Report {
+  id                String   @id @default(cuid())
+  organizationId    String
+  type              String
+  title             String
+  summary           String
+  periodFrom        DateTime?
+  periodTo          DateTime?
+  repositoryId      String?
+  pullRequestNumber Int?
+  content           Json
+  generatedBy       String   @default("system")
+  createdAt         DateTime @default(now())
+
+  shareLink ShareLink?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, type])
+  @@index([organizationId, createdAt(sort: Desc)])
+}
+
+model ShareLink {
+  id           String    @id @default(cuid())
+  reportId     String    @unique
+  token        String    @unique
+  expiresAt    DateTime?
+  passwordHash String?
+  revoked      Boolean   @default(false)
+  accessCount  Int       @default(0)
+  createdAt    DateTime  @default(now())
+
+  report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+}
+
+model AuditEvent {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String?
+  action         String
+  resource       String
+  resourceId     String
+  details        Json?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([organizationId, action])
+}
+
+model ApiKey {
+  id             String    @id @default(cuid())
+  organizationId String
+  name           String
+  keyHash        String    @unique
+  keyPrefix      String
+  scopes         String[]
+  lastUsedAt     DateTime?
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+model Notification {
+  id             String   @id @default(cuid())
+  organizationId String
+  type           String
+  title          String
+  message        String
+  read           Boolean  @default(false)
+  link           String?
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, read])
+}
+

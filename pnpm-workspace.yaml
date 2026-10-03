@@ -1,0 +1,43 @@
+# pnpm 11 reads workspace settings from this file, not from the "pnpm" key in
+# package.json. An override placed there is silently ignored, which is the worst
+# possible failure mode for a security fix: the audit still fails, but nothing
+# explains why the override had no effect.
+overrides:
+  # GHSA-ggr8-5vv4-36mx, prototype pollution in deepmerge-ts <8.0.0.
+  #
+  # @prisma/config pins the dependency to the exact version 7.1.5, and Prisma 7
+  # still pins it, so there is no upstream release that clears this. The
+  # override is safe to force because @prisma/config imports exactly one symbol
+  # - `deepmerge` - and 8.0.0 changed no other part of the public surface; the
+  # major bump exists to ship the fix. `pnpm test:unit` and the production
+  # build both run in CI on every commit, so a silent break here cannot land.
+  deepmerge-ts: 8.0.2
+
+allowBuilds:
+  "@prisma/client": true
+  "@prisma/engines": true
+  esbuild: true
+  msgpackr-extract: true
+  prisma: true
+  sharp: false
+  unrs-resolver: false
+  workerd: true
+
+# pnpm refuses packages published within the release-age window. The Next.js
+# 16.3.6 release that closes GHSA-vcvr-r3jv-pc5j is inside that window, so the
+# security fix has to be named here explicitly - the alternative is sitting on
+# a known RCE until the window closes.
+minimumReleaseAgeExclude:
+  - "@next/env@16.3.8"
+  - "@next/eslint-plugin-next@16.3.8"
+  - "@next/swc-darwin-arm64@16.3.8"
+  - "@next/swc-darwin-x64@16.3.8"
+  - "@next/swc-linux-arm64-gnu@16.3.8"
+  - "@next/swc-linux-arm64-musl@16.3.8"
+  - "@next/swc-linux-x64-gnu@16.3.8"
+  - "@next/swc-linux-x64-musl@16.3.8"
+  - "@next/swc-win32-arm64-msvc@16.3.8"
+  - "@next/swc-win32-x64-msvc@16.3.8"
+  - eslint-config-next@16.3.8
+  - next@16.3.8
+  - deepmerge-ts@8.0.2

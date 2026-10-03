@@ -1,0 +1,149 @@
+{
+  "name": "releasesignal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Deterministic release-risk and QA intelligence platform: CI ingestion, explainable quality gates, flaky-test detection and provider-agnostic failure analysis.",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm test:unit && pnpm test:e2e",
+    "test:unit": "vitest run",
+    "test:unit:watch": "vitest",
+    "test:unit:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "gate": "bash scripts/gate.sh",
+    "verify": "pnpm verify:secrets && pnpm verify:links && pnpm verify:attribution && pnpm verify:build",
+    "verify:secrets": "tsx scripts/check-secrets.ts",
+    "verify:links": "tsx scripts/check-links.ts",
+    "verify:attribution": "tsx scripts/check-attribution.ts",
+    "verify:build": "tsx scripts/verify-build.ts",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:reset": "npx prisma db push --force-reset && pnpm db:seed",
+    "db:push": "npx prisma db push",
+    "db:studio": "npx prisma studio",
+    "db:generate": "prisma generate",
+    "prepare": "husky",
+    "postinstall": "prisma generate"
+  },
+  "lint-staged": {
+    "src/lib/**/*.{ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "src/components/**/*.{ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "src/app/**/*.{ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "{src/types,src/contexts}/**/*.{ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "{e2e,scripts,prisma}/**/*.{ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "src/proxy.ts": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "eslint.config.mjs": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "next.config.ts": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "playwright.config.ts": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "vitest.config.ts": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "vitest.setup.ts": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{css,json,md,yml,yaml}": [
+      "prettier --write"
+    ]
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "@radix-ui/react-accordion": "^1.2.20",
+    "@radix-ui/react-alert-dialog": "^1.1.23",
+    "@radix-ui/react-avatar": "^1.2.6",
+    "@radix-ui/react-dialog": "^1.1.23",
+    "@radix-ui/react-dropdown-menu": "^2.1.24",
+    "@radix-ui/react-label": "^2.1.15",
+    "@radix-ui/react-popover": "^1.1.23",
+    "@radix-ui/react-progress": "^1.1.16",
+    "@radix-ui/react-scroll-area": "^1.2.18",
+    "@radix-ui/react-select": "^2.3.7",
+    "@radix-ui/react-separator": "^1.1.15",
+    "@radix-ui/react-slider": "^1.4.7",
+    "@radix-ui/react-slot": "^1.3.3",
+    "@radix-ui/react-switch": "^1.3.7",
+    "@radix-ui/react-tabs": "^1.1.21",
+    "@radix-ui/react-toggle": "^1.1.18",
+    "@radix-ui/react-tooltip": "^1.2.16",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.4.0",
+    "lucide-react": "^1.34.0",
+    "next": "16.3.8",
+    "next-auth": "5.0.0-beta.32",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "recharts": "^3.10.1",
+    "sonner": "^2.0.8",
+    "tailwind-merge": "^3.6.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@tailwindcss/postcss": "^4",
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.7",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.1.0",
+    "@vitest/coverage-v8": "4.1.11",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.8",
+    "eslint-plugin-jsx-a11y": "6.10.2",
+    "happy-dom": "20.14.5",
+    "husky": "9.1.7",
+    "lint-staged": "17.6.0",
+    "prettier": "3.9.9",
+    "prisma": "^6.19.3",
+    "tailwindcss": "^4",
+    "tsx": "^4.23.12",
+    "typescript": "^5",
+    "typescript-eslint": "8.71.0",
+    "vitest": "^4.1.11"
+  },
+  "packageManager": "pnpm@11.20.0",
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  }
+}

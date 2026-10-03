@@ -1,0 +1,49 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "skipLibCheck": true,
+    /* Next rewrites this file on every build and re-adds `allowJs`, so it is
+     * accepted here rather than removed: a build that leaves a dirty working
+     * tree is worse than a compiler that tolerates a .js file it will never
+     * find, and every source file here is TypeScript anyway. */
+    "allowJs": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    /*
+     * `vitest.config.ts` sets `globals: true`, so `describe`, `it`, `expect`,
+     * `vi` and the timer helpers exist without an import in every file. Without
+     * this line the editor marks them all as undefined and the type-aware lint
+     * tier reports `vi` as an unsafe member access on an unresolved type.
+     */
+    "types": ["node", "vitest/globals"],
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts",
+    "**/*.mts"
+  ],
+  "exclude": ["node_modules", ".next"]
+}
