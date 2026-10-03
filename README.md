@@ -239,10 +239,73 @@ are deliberate:
   build means a preview deployment can migrate production's schema. The initial
   migration is checked in; apply it once with `pnpm db:deploy`.
 
-Required environment variables: `DATABASE_URL`, `AUTH_SECRET` (from
-`openssl rand -base64 32`), `INGEST_API_KEY` (same generator), and the
-`GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` pair if you want OAuth rather than
-demo data.
+Required environment variables:
+
+| Variable                                    | Required  | Notes                                                             |
+| ------------------------------------------- | --------- | ----------------------------------------------------------------- |
+| `DATABASE_URL`                              | yes       | Managed PostgreSQL. See the pooling note below.                   |
+| `AUTH_SECRET`                               | yes       | `openssl rand -base64 32`. Rotating it invalidates every session. |
+| `INGEST_API_KEY`                            | yes       | `openssl rand -base64 32`. Bearer token for `POST /api/ingress`.  |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | for OAuth | Callback URL must be the deployed origin.                         |
+
+There is deliberately **no** `AUTH_TRUST_HOST` to set. Both deployment targets
+put the app behind a proxy that terminates TLS, which Auth.js refuses unless it
+trusts the host — so `trustHost: true` is set in
+[src/lib/auth.ts](src/lib/auth.ts) with the reasoning written next to it, rather
+than left to an environment variable that nobody sets and everybody forgets.
+The trade is that the proxy in front must set `X-Forwarded-Host` from a value
+it controls, which is the default in both targets.
+
+`NEXT_PUBLIC_DEMO_MODE` is **not** in that list on purpose — its absence is
+what makes the app require authentication.
+
+#### Two things that will bite on a pooled database
+
+Neither is a bug in this application; both are properties of running Prisma on
+a serverless platform against a connection pooler, and both fail on the first
+request rather than at build time.
+
+**Migrations cannot run through a pooler.** Managed PostgreSQL providers hand
+out a pooled URL for the application and a separate direct URL for migrations.
+Running `prisma migrate deploy` against the pooled one fails, because the
+session-level advisory lock it takes is not supported through the pooler. Run
+migrations against the direct URL:
+
+```bash
+DATABASE_URL="$DIRECT_DATABASE_URL" pnpm db:deploy
+```
+
+**Every serverless instance opens its own pool.** Prisma defaults to ten
+connections per client, and a Vercel function instance is its own client, so a
+traffic spike multiplies the connection count against the provider's limit with
+nothing to cap it. Either point `DATABASE_URL` at the provider's pooler, or
+append `?connection_limit=1` and let the provider's pooler do the pooling.
+Nothing here sets either, so this is a deployment decision rather than a
+default — it is listed in the roadmap under _Connection-pool behaviour_.
+
+#### Verify the deployment before trusting it
+
+```bash
+curl -i -X POST "$URL/api/ingress" -H 'content-type: application/json' -d '{}'
+```
+
+`401` means the endpoint is authenticating. `503` means it is failing closed
+because `INGEST_API_KEY` is unset — also correct, and worth knowing which one you
+are looking at. A `200` or `201` means demo mode was compiled in; rebuild
+without `NEXT_PUBLIC_DEMO_MODE`, because it is inlined at build time and cannot
+be turned off by changing a runtime variable.
+
+#### The build does not need a database
+
+Worth stating because it is the usual cause of a failed first deploy: the
+build succeeds with no database reachable. Every `/api` route is dynamic and
+every page prerenders without querying, so `prisma generate && next build`
+needs no connection. A failed build is therefore a real build problem, never a
+missing `DATABASE_URL`.
+
+Note that the local gate only ever builds with `NEXT_PUBLIC_DEMO_MODE=true`, so
+the non-demo build path is verified by this deployment rather than by CI. That
+is the one gap in the gate worth closing, and it is on the roadmap.
 
 **Docker.** [`Dockerfile`](Dockerfile) builds a standalone output and
 [`docker-compose.yml`](docker-compose.yml) runs it behind nginx with
