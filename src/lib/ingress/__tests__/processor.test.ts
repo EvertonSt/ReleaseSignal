@@ -22,8 +22,16 @@ vi.mock("../../db", () => ({
   DEFAULT_ORG_ID: "org_demo_001",
 }));
 
-const { processPayload, isDuplicate, getRun, getAllRuns, getRunCount, clearRuns, workflowFilePath } =
-  await import("../processor");
+const {
+  processPayload,
+  isDuplicate,
+  getRun,
+  getAllRuns,
+  getRunCount,
+  clearRuns,
+  workflowFilePath,
+  withConflictRetry,
+} = await import("../processor");
 
 type TestCase = { status: TestResult["status"]; duration?: number };
 
@@ -190,6 +198,75 @@ describe("accessors", () => {
     expect(await getRunCount()).toBe(0);
     expect(await getAllRuns()).toEqual([]);
     expect(await isDuplicate("k2")).toBe(false);
+  });
+});
+
+describe("withConflictRetry", () => {
+  /** The shape Prisma throws when a unique constraint is violated. */
+  const p2002 = Object.assign(new Error("Unique constraint failed"), { code: "P2002" });
+
+  it("returns the result without retrying when nothing conflicts", async () => {
+    let calls = 0;
+    const result = await withConflictRetry(() => {
+      calls++;
+      return Promise.resolve("ok");
+    });
+
+    expect(result).toBe("ok");
+    expect(calls).toBe(1);
+  });
+
+  it("retries once and succeeds when the first attempt loses a race", async () => {
+    // This is the exact production sequence: Prisma's `upsert` is a lookup
+    // followed by a write, so a concurrent ingest of the same repository makes
+    // the loser fail with P2002 even though the row it wanted now exists.
+    let calls = 0;
+    const result = await withConflictRetry(() => {
+      calls++;
+      return calls === 1 ? Promise.reject(p2002) : Promise.resolve("ok");
+    });
+
+    expect(result).toBe("ok");
+    expect(calls).toBe(2);
+  });
+
+  it("retries up to the bound and then surfaces the failure", async () => {
+    // A real duplicate - two genuinely different keys colliding - must not be
+    // retried forever.
+    let calls = 0;
+    await expect(
+      withConflictRetry(() => {
+        calls++;
+        return Promise.reject(p2002);
+      })
+    ).rejects.toThrow("Unique constraint failed");
+    expect(calls).toBe(3);
+  });
+
+  it("does not retry an error that is not a conflict", async () => {
+    let calls = 0;
+    const boom = Object.assign(new Error("connection reset"), { code: "P1001" });
+
+    await expect(
+      withConflictRetry(() => {
+        calls++;
+        return Promise.reject(boom);
+      })
+    ).rejects.toThrow("connection reset");
+    expect(calls).toBe(1);
+  });
+
+  it("does not retry an error that carries no code at all", async () => {
+    // The helper reads `.code` off whatever it catches, so an error from a
+    // layer that never set one has to pass straight through.
+    let calls = 0;
+    await expect(
+      withConflictRetry(() => {
+        calls++;
+        return Promise.reject(new Error("no code here"));
+      })
+    ).rejects.toThrow("no code here");
+    expect(calls).toBe(1);
   });
 });
 

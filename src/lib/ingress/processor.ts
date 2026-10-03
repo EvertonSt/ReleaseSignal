@@ -34,6 +34,39 @@ const idempotencyKeys = new Set<string>();
  * prefix. The prefix stays - the end-to-end suite matches on it, and it is
  * what makes a log line readable - but the body is now a UUID.
  */
+/**
+ * Retry an operation that lost a unique-constraint race.
+ *
+ * Changing find-then-create into `upsert` was necessary but not sufficient, and
+ * the database integration test showed exactly how insufficient: two concurrent
+ * ingests of the same repository still produced
+ *
+ *   Invalid `prisma.repository.upsert()` invocation:
+ *   Unique constraint failed on the fields: (`organizationId`,`fullName`)  P2002
+ *
+ * Prisma does not compile `upsert` to a native `INSERT ... ON CONFLICT` on
+ * PostgreSQL - it is still a lookup followed by a write - so the race moves
+ * rather than disappearing. The loser of the race fails even though the row it
+ * wanted now exists, which is what makes this safe to retry: the second attempt
+ * finds the row the first one wrote and succeeds.
+ *
+ * Bounded rather than infinite, because a genuine duplicate - two different
+ * keys colliding - must still surface as an error.
+ *
+ * Exported for testing: this is a claim about concurrency, and the only way to
+ * hold a claim about concurrency is to be able to exercise it.
+ */
+export async function withConflictRetry<T>(operation: () => Promise<T>, attempts = 3): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      const code = (error as { code?: unknown })?.code;
+      if (code !== "P2002" || attempt >= attempts) throw error;
+    }
+  }
+}
+
 function generateRunId(): string {
   return generateId("run");
 }
@@ -160,31 +193,38 @@ async function processToDatabase(
   // race: a push and its pull-request run routinely land together.
   const fullName = payload.repository;
   const repoName = fullName.split("/").pop() || fullName;
-  const repo = await prisma.repository.upsert({
-    where: { organizationId_fullName: { organizationId: orgId, fullName } },
-    create: {
-      organizationId: orgId,
-      name: repoName,
-      fullName,
-      connected: true,
-      integrationStatus: "connected",
-    },
-    update: {},
-  });
+  const repo = await withConflictRetry(() =>
+    prisma.repository.upsert({
+      where: { organizationId_fullName: { organizationId: orgId, fullName } },
+      create: {
+        organizationId: orgId,
+        name: repoName,
+        fullName,
+        connected: true,
+        integrationStatus: "connected",
+      },
+      update: {},
+    })
+  );
 
   // 2. Find or create workflow. Atomic for the same reason as the repository,
   // which is why migration 1 adds the unique constraint this relies on.
   let workflowId: string | null = null;
-  if (payload.workflow) {
-    const wf = await prisma.workflow.upsert({
-      where: { repositoryId_name: { repositoryId: repo.id, name: payload.workflow } },
-      create: {
-        repositoryId: repo.id,
-        name: payload.workflow,
-        path: workflowFilePath(payload.workflow),
-      },
-      update: {},
-    });
+  // Bound to a local: the narrowing `if (payload.workflow)` does not survive
+  // into the closure, and `payload.workflow` is `string | undefined`.
+  const workflowName = payload.workflow;
+  if (workflowName) {
+    const wf = await withConflictRetry(() =>
+      prisma.workflow.upsert({
+        where: { repositoryId_name: { repositoryId: repo.id, name: workflowName } },
+        create: {
+          repositoryId: repo.id,
+          name: workflowName,
+          path: workflowFilePath(workflowName),
+        },
+        update: {},
+      })
+    );
     workflowId = wf.id;
   }
 
