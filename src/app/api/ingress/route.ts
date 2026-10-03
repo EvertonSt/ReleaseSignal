@@ -116,6 +116,16 @@ export async function POST(request: NextRequest) {
       { status: 201 }
     );
   } catch (error) {
+    /*
+     * Logged, not just returned.
+     *
+     * The response body carries the message, so the caller can see it — but a
+     * caller cannot correlate a Prisma message with the request that caused it
+     * without also having the server log. The first version of this handler
+     * swallowed the error entirely, and the database integration test spent a
+     * whole CI run reporting "500" with nothing to act on.
+     */
+    console.error(`[api/ingress] ${requestId} failed`, error);
     return NextResponse.json(
       {
         success: false,

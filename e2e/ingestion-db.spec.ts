@@ -44,6 +44,15 @@ function payload(idempotencyKey: string) {
 /** Headers for an authenticated ingestion request. */
 const AUTH = { Authorization: `Bearer ${TEST_KEY}` };
 
+/** The body of a response, or a placeholder if it cannot be read. */
+async function safeJson(response: { json: () => Promise<unknown> }): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return "<unreadable body>";
+  }
+}
+
 test.describe("POST /api/ingress against PostgreSQL", () => {
   test("persists a run and reports it back from the database", async ({ request }) => {
     const key = `db-persist-${Date.now()}`;
@@ -95,7 +104,11 @@ test.describe("POST /api/ingress against PostgreSQL", () => {
       headers: AUTH,
       data: payload(key),
     });
-    expect(first.status()).toBe(201);
+
+    // The response body is included in the failure message on purpose. A bare
+    // "expected 201, received 500" tells nobody anything; the body carries the
+    // underlying database error, which is the part worth reading.
+    expect(first.status(), `ingest failed: ${JSON.stringify(await safeJson(first))}`).toBe(201);
 
     const second = await request.post(`${BASE}/api/ingress`, {
       headers: AUTH,
