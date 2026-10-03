@@ -96,6 +96,22 @@ updates:
       # whose authentication is under review. Upgrade it deliberately.
       - dependency-name: "next-auth"
         update-types: ["version-update:semver-major"]
+      # Prisma 7 is not a dependency bump, it is a migration, and merging the
+      # branch on its own produces a repository that does not build. It moves
+      # the client to the Rust-free generator with a required output path, so
+      # every PrismaClient import changes; it requires a driver adapter for
+      # every database; it ships as an ES module; it stops loading environment
+      # variables by default; and it changes both the connection pool defaults
+      # and SSL certificate validation. That is its own piece of work, proved
+      # by the database integration job, on its own branch.
+      #
+      # Ignored rather than left to be re-raised every Monday: a pull request
+      # that is never going to be merged is worse than no pull request. The
+      # reasoning is here so the omission is a decision on the record.
+      - dependency-name: "prisma"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@prisma/client"
+        update-types: ["version-update:semver-major"]
 
   # Every action in .github/workflows is pinned to a commit SHA. Dependabot
   # understands pinned actions and opens pull requests that move the SHA and
