@@ -19,7 +19,11 @@ export default defineConfig([
   ...nextVitals,
   ...nextTs,
   globalIgnores([
-    ".next/**",
+    // `.next*` rather than `.next`: NEXT_DIST_DIR lets a second build output
+    // live beside the default one, and build artefacts are compiled code that
+    // will never satisfy the type-aware rules. Naming the pattern means a new
+    // build directory does not have to be added here to keep the lint gate green.
+    ".next*/**",
     "out/**",
     "build/**",
     "coverage/**",

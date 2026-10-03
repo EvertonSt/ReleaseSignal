@@ -116,9 +116,9 @@ jobs:
   # routes on demand, caches differently and skips prerendering, so a suite that
   # passes against it is testing a different application than the one shipped.
   e2e:
-    name: e2e (Playwright, 5 projects)
+    name: e2e (Playwright, 6 projects)
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     needs: quality
     steps:
       - name: Checkout
@@ -148,9 +148,14 @@ jobs:
       - name: Install browsers
         run: pnpm exec playwright install --with-deps chromium firefox webkit
 
-      # playwright.config.ts builds and serves the app itself. The build has to
-      # happen here rather than in the quality job: a Next.js build is not a
-      # portable artefact, and the 20 MB of platform-specific binaries it pulls
+      # scripts/e2e-server.mjs builds and serves three servers: a demo build
+      # for the browser projects, plus two non-demo builds-served-from-one
+      # artefact that prove the ingestion endpoint rejects unauthorised writes.
+      # Two builds because demo mode is inlined at build time - a non-demo
+      # server started from a demo bundle would still skip the check.
+      #
+      # The builds happen here rather than in the quality job: a Next.js build
+      # is not a portable artefact, and the platform-specific binaries it pulls
       # in make passing it between runners more fragile than rebuilding.
       - name: End-to-end tests
         run: pnpm test:e2e

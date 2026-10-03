@@ -13,6 +13,12 @@ import { defineConfig, devices } from "@playwright/test";
 const PORT = Number(process.env.E2E_PORT ?? 3100);
 const BASE_URL = process.env.BASE_URL ?? `http://127.0.0.1:${PORT}`;
 
+/**
+ * The ingestion authorization spec. It talks to the two non-demo servers, so it
+ * runs in its own project rather than five times inside the browser projects.
+ */
+const AUTH_SPEC = /ingestion-auth\.spec\.ts/;
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
@@ -36,27 +42,29 @@ export default defineConfig({
   },
 
   projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-    { name: "firefox", use: { ...devices["Desktop Firefox"] } },
-    { name: "mobile-chrome", use: { ...devices["Pixel 7"] } },
-    { name: "mobile-safari", use: { ...devices["iPhone 14"] } },
-    { name: "tablet", use: { ...devices["iPad (gen 7)"] } },
+    { name: "chromium", use: { ...devices["Desktop Chrome"] }, testIgnore: AUTH_SPEC },
+    { name: "firefox", use: { ...devices["Desktop Firefox"] }, testIgnore: AUTH_SPEC },
+    { name: "mobile-chrome", use: { ...devices["Pixel 7"] }, testIgnore: AUTH_SPEC },
+    { name: "mobile-safari", use: { ...devices["iPhone 14"] }, testIgnore: AUTH_SPEC },
+    { name: "tablet", use: { ...devices["iPad (gen 7)"] }, testIgnore: AUTH_SPEC },
+    {
+      // The ingestion authorization spec makes no browser assertions - it
+      // drives the endpoint over HTTP against two non-demo servers. Running it
+      // in five browsers would be five times the wall clock for one result.
+      name: "api-security",
+      testMatch: AUTH_SPEC,
+    },
   ],
 
   webServer: {
-    // Build first, then serve the build. `reuseExistingServer` is false in CI so
-    // a stale server from a previous run cannot make the suite pass against
-    // yesterday's code.
-    command: `pnpm build && pnpm start --port ${PORT}`,
+    // Builds the demo bundle AND a non-demo bundle, then serves three servers.
+    // See scripts/e2e-server.mjs for why two of them cannot share the demo
+    // build: the authorization check is compiled out of a demo build.
+    command: "node scripts/e2e-server.mjs",
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 300_000,
     stdout: "pipe",
     stderr: "pipe",
-    env: {
-      // The suite exercises the demo path, which is the path a reviewer opening
-      // the repository will see.
-      NEXT_PUBLIC_DEMO_MODE: "true",
-    },
   },
 });

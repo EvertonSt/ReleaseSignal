@@ -30,6 +30,10 @@ const TEXT = /\.(ts|tsx|js|mjs|cjs|json|md|mdx|css|yml|yaml|sh|prisma)$/i;
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
     if (SKIP_DIRECTORIES.has(entry)) return [];
+    // Any build output, including the alternate directory NEXT_DIST_DIR points
+    // at. Compiled JavaScript full of `require()` calls and minified bundles
+    // produces thousands of false "file does not exist" findings.
+    if (entry.startsWith(".next")) return [];
     const full = path.join(dir, entry);
     if (statSync(full).isDirectory()) return walk(full);
     return BINARY.test(entry) ? [] : [full];

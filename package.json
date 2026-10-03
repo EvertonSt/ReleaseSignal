@@ -29,6 +29,8 @@
     "verify:attribution": "tsx scripts/check-attribution.ts",
     "verify:build": "tsx scripts/verify-build.ts",
     "db:seed": "tsx prisma/seed.ts",
+    "db:deploy": "prisma migrate deploy",
+    "db:migrate": "prisma migrate dev",
     "db:reset": "npx prisma db push --force-reset && pnpm db:seed",
     "db:push": "npx prisma db push",
     "db:studio": "npx prisma studio",

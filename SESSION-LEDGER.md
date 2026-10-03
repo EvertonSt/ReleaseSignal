@@ -109,6 +109,54 @@ supply-chain hole wearing a version number.
 
 ---
 
+## Making the ingestion check impossible to deploy away
+
+The authorization added for the endpoint was covered by unit tests, and unit
+tests on a helper cannot tell whether the ROUTE calls it — which is exactly the
+gap the missing check lived in. So the suite now proves it over HTTP.
+
+That needed a second server, and a second server needed a second _build_: demo
+mode is inlined at build time, so no amount of server environment produces a
+build where the check is live. `scripts/e2e-server.mjs` builds both variants and
+serves three ports — demo, non-demo without a key, non-demo with one. The demo
+server starts **last**, because Playwright waits on a single URL: making that
+one the last to bind means "the demo server is up" and "the auth servers are
+up" are the same fact, instead of every spec growing its own wait loop.
+
+The eight tests live in their own Playwright project rather than running five
+times inside the browser projects — they make no browser assertion.
+
+They were verified by neutering `authorizeIngest` to always allow and re-running:
+**7 of 8 went red.** The eighth asserts the correct token gets _past_ the check,
+which by design passes either way. A security test that cannot fail is a comment.
+
+## What deploying to Vercel actually required
+
+Three problems, none of them visible until the deployment was inspected.
+
+`vercel.json` set `NEXT_PUBLIC_DEMO_MODE: "true"`. That is the exact build the
+README warns never to ship — with the ingestion authorization compiled out —
+sitting in the repository's own deployment config. Removing the key is not
+enough, because the next person adds it back, so `next.config.ts` now **refuses
+the build** when demo mode is set under Vercel. Verified both ways: the guarded
+build exits 1 with an explanation, the clean one exits 0.
+
+The README claimed migrations were checked in. `prisma/migrations` did not
+exist. The initial migration is now generated from the schema (23 tables) and
+`pnpm db:deploy` applies it. It is deliberately **not** wired into the build
+command: migrating on every build lets a preview deployment migrate production.
+
+Security headers were defined twice — in `next.config.ts` and again in
+`vercel.json`. Two sources of truth that can drift is one source of truth too
+many, so the duplication is gone and the headers apply identically on Vercel,
+in Docker and locally.
+
+Along the way this also produced the missing piece for deployment in general:
+`NEXT_DIST_DIR` lets a non-demo build be produced beside a demo one, which is
+something the project previously had no way to do.
+
+---
+
 ## The security finding that came out of writing CI
 
 Writing the security job is what forced the question of what "green" means for
