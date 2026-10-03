@@ -113,6 +113,10 @@ model Workflow {
   repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
   testRuns   TestRun[]
 
+  // Two concurrent ingests of the same workflow used to create two rows,
+  // because the lookup was a find-then-create with nothing for the database to
+  // catch it. This constraint is what lets the write be an atomic upsert.
+  @@unique([repositoryId, name])
   @@index([repositoryId])
 }
 

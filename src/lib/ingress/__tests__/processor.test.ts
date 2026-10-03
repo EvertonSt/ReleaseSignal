@@ -22,7 +22,7 @@ vi.mock("../../db", () => ({
   DEFAULT_ORG_ID: "org_demo_001",
 }));
 
-const { processPayload, isDuplicate, getRun, getAllRuns, getRunCount, clearRuns } =
+const { processPayload, isDuplicate, getRun, getAllRuns, getRunCount, clearRuns, workflowFilePath } =
   await import("../processor");
 
 type TestCase = { status: TestResult["status"]; duration?: number };
@@ -190,5 +190,37 @@ describe("accessors", () => {
     expect(await getRunCount()).toBe(0);
     expect(await getAllRuns()).toEqual([]);
     expect(await isDuplicate("k2")).toBe(false);
+  });
+});
+
+describe("workflowFilePath", () => {
+  it("lowercases and adds the extension", () => {
+    expect(workflowFilePath("CI")).toBe(".github/workflows/ci.yml");
+  });
+
+  it("does not double the extension", () => {
+    // The expression this replaces appended ".yml" unconditionally, so a
+    // payload that already reported `integration.yml` produced
+    // `integration.yml.yml`.
+    expect(workflowFilePath("integration.yml")).toBe(".github/workflows/integration.yml");
+  });
+
+  it("accepts a full path from a CI provider", () => {
+    expect(workflowFilePath(".github/workflows/deploy.yaml")).toBe(".github/workflows/deploy.yml");
+  });
+
+  it("does not eat the letter s", () => {
+    // The original regex was `/s+/g`, which replaced runs of the letter "s"
+    // rather than whitespace: "tests" became "te-ts".
+    expect(workflowFilePath("tests")).toBe(".github/workflows/tests.yml");
+  });
+
+  it("turns whitespace and punctuation into single hyphens", () => {
+    expect(workflowFilePath("My Tests")).toBe(".github/workflows/my-tests.yml");
+    expect(workflowFilePath("  Release  //  Gate  ")).toBe(".github/workflows/release-gate.yml");
+  });
+
+  it("falls back rather than producing an empty filename", () => {
+    expect(workflowFilePath("   ")).toBe(".github/workflows/workflow.yml");
   });
 });

@@ -39,6 +39,29 @@ function generateRunId(): string {
 }
 
 /**
+ * Where a workflow's definition lives, derived from the name the CI system
+ * reported.
+ *
+ * Two bugs lived in the expression this replaces. The regex was `/s+/g`, so it
+ * replaced runs of the letter "s" rather than whitespace - a workflow called
+ * "tests" became "te-ts". And it appended `.yml` unconditionally, so a payload
+ * that already said `integration.yml` produced `integration.yml.yml`.
+ *
+ * Exported so the rule is tested directly; a path that is quietly wrong is
+ * harmless until someone tries to use it.
+ */
+export function workflowFilePath(workflow: string): string {
+  const trimmed = workflow.trim().toLowerCase();
+  // Strip the one prefix that is a genuine convention, rather than taking an
+  // arbitrary last path segment - "Release // Gate" is a name with punctuation
+  // in it, not a path, and splitting it would silently drop "Release".
+  const base = trimmed.replace(/^\.?github\/workflows\//, "");
+  const withoutExtension = base.replace(/\.(ya?ml)$/, "");
+  const slug = withoutExtension.replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return `.github/workflows/${slug || "workflow"}.yml`;
+}
+
+/**
  * Is this idempotency key already recorded?
  *
  * It has to be ASYNC, and until the database integration test existed it was
@@ -129,39 +152,39 @@ async function processToDatabase(
   const orgId = DEFAULT_ORG_ID;
   const now = new Date();
 
-  // 1. Find or create repository
+  // 1. Find or create repository.
+  //
+  // `upsert`, not find-then-create. Two CI pipelines reporting the same
+  // repository at the same moment both used to find nothing and both created,
+  // and one lost on the unique constraint with a 500. That is not a theoretical
+  // race: a push and its pull-request run routinely land together.
   const fullName = payload.repository;
   const repoName = fullName.split("/").pop() || fullName;
-  let repo = await prisma.repository.findFirst({
-    where: { organizationId: orgId, fullName },
+  const repo = await prisma.repository.upsert({
+    where: { organizationId_fullName: { organizationId: orgId, fullName } },
+    create: {
+      organizationId: orgId,
+      name: repoName,
+      fullName,
+      connected: true,
+      integrationStatus: "connected",
+    },
+    update: {},
   });
-  if (!repo) {
-    repo = await prisma.repository.create({
-      data: {
-        organizationId: orgId,
-        name: repoName,
-        fullName,
-        connected: true,
-        integrationStatus: "connected",
-      },
-    });
-  }
 
-  // 2. Find or create workflow
+  // 2. Find or create workflow. Atomic for the same reason as the repository,
+  // which is why migration 1 adds the unique constraint this relies on.
   let workflowId: string | null = null;
   if (payload.workflow) {
-    let wf = await prisma.workflow.findFirst({
-      where: { repositoryId: repo.id, name: payload.workflow },
+    const wf = await prisma.workflow.upsert({
+      where: { repositoryId_name: { repositoryId: repo.id, name: payload.workflow } },
+      create: {
+        repositoryId: repo.id,
+        name: payload.workflow,
+        path: workflowFilePath(payload.workflow),
+      },
+      update: {},
     });
-    if (!wf) {
-      wf = await prisma.workflow.create({
-        data: {
-          repositoryId: repo.id,
-          name: payload.workflow,
-          path: `.github/workflows/${payload.workflow.toLowerCase().replace(/s+/g, "-")}.yml`,
-        },
-      });
-    }
     workflowId = wf.id;
   }
 
