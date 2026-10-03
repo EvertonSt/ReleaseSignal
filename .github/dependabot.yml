@@ -19,25 +19,20 @@ updates:
       day: monday
       time: "07:00"
       timezone: America/Sao_Paulo
-    open-pull-requests-limit: 5
+    # Above the number of groups below, on purpose. A pull request that cannot
+    # be merged still occupies a slot, and a major bump that needs migration
+    # work should not be able to starve the routine ones that are ready now.
+    open-pull-requests-limit: 8
     labels:
       - dependencies
     commit-message:
       prefix: "build(deps)"
-    # One grouped pull request per ecosystem minor line rather than one per
-    # package. Twenty transitive bumps are unreviewable; a single coherent
-    # upgrade of the things this repository actually depends on is reviewable.
+    # Ordered deliberately. The first group whose patterns match a dependency
+    # wins, so the package-specific groups come before the catch-alls: a `next`
+    # major has to land next to `eslint-config-next`, not inside a bundle of
+    # unrelated production bumps.
     groups:
-      production-dependencies:
-        applies-to: version-updates
-        dependency-type: production
-        patterns:
-          - "*"
-      development-dependencies:
-        applies-to: version-updates
-        dependency-type: development
-        patterns:
-          - "*"
+      # Packages whose versions are only safe moving in step with another.
       nextjs:
         applies-to: version-updates
         patterns:
@@ -48,6 +43,53 @@ updates:
         patterns:
           - "prisma"
           - "@prisma/client"
+
+      # Routine bumps travel together. One grouped pull request per minor line
+      # rather than one per package: twenty transitive bumps are unreviewable,
+      # and a single coherent upgrade of the things this repository actually
+      # depends on is reviewable.
+      production-dependencies:
+        applies-to: version-updates
+        dependency-type: production
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      development-dependencies:
+        applies-to: version-updates
+        dependency-type: development
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+      # Majors never travel together, and never travel with a routine bump.
+      # The first version of this file grouped them, and that produced pull
+      # request 6: eight updates in one branch, of which eslint 10 breaks
+      # eslint-config-next and TypeScript 7 is unsupported by
+      # typescript-eslint. Neither could be taken alone, so the four updates
+      # that were perfectly mergeable went down with them and the whole
+      # branch was unmergeable. A major version is a migration with its own
+      # release notes, so each one gets its own pull request and is taken or
+      # refused on its own evidence.
+      production-major:
+        applies-to: version-updates
+        dependency-type: production
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+        group-by: dependency-name
+      development-major:
+        applies-to: version-updates
+        dependency-type: development
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+        group-by: dependency-name
     ignore:
       # 5.0.0-beta.x of next-auth: every upgrade moves the API underneath it,
       # and a beta is not something to accept automatically on a repository
