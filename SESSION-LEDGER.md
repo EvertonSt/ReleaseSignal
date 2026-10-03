@@ -229,6 +229,47 @@ Prisma to 7 — which removed `url` from the datasource block and broke
 is for, and it is also why the framework upgrade in ADR 0005 was worth doing by
 hand.
 
+### The race needed three attempts, and the third one is the actual fix
+
+The first fix made `getRun`/`getAllRuns` read Prisma. Then the integration test
+reported the idempotency case as **flaky**: first POST `500`, retry `201`. That
+is not flakiness — it is two requests arriving together.
+
+Converting find-then-create into `upsert` was the obvious response and it was
+**not enough**. Prisma does not compile `upsert` to a native `INSERT ... ON
+CONFLICT` on PostgreSQL; it is still a lookup followed by a write, so the race
+simply moved:
+
+```
+Invalid `prisma.repository.upsert()` invocation:
+Unique constraint failed on the fields: (`organizationId`,`fullName`)   P2002
+```
+
+The fix that works is a bounded retry on `P2002`. It is safe precisely because
+of the detail that makes the error look fatal: the loser of the race fails even
+though the row it wanted now exists, so the next attempt finds it and succeeds.
+A real duplicate — two genuinely different keys colliding — still surfaces,
+because the retry is bounded.
+
+`Workflow` had no unique constraint at all, only an index, so concurrent
+requests there would have written two identical rows: quieter corruption than a
+500, and worse. Migration 1 adds it, because an upsert needs something to be
+atomic _against_.
+
+Two things had to be fixed for that error to be visible at all. The route caught
+everything and returned the message in a body no failing assertion displays,
+while never writing it to the server log — so a CI run reported "500" and
+nothing else. It now logs with its requestId, and the test puts the body in the
+failure message. A 500 that is returned but never logged is undiagnosable after
+the fact.
+
+The final run is 5 passed, zero flaky, zero server-side errors.
+
+The same edit fixed two more bugs in the line it touched: the slug regex was
+`/s+/g`, so it replaced runs of the **letter s** — `tests` became `te-ts` — and
+it appended `.yml` unconditionally, so `integration.yml` became
+`integration.yml.yml`. `workflowFilePath` is now exported and tested directly.
+
 ---
 
 ## The security finding that came out of writing CI
