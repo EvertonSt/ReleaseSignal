@@ -54,3 +54,6 @@ docker-compose.override.yml
 
 # NOTE: `scripts/` is deliberately NOT ignored. The verification gates live
 # there and a repo whose own gates are untracked is a repo nobody can re-run.
+
+.vercel
+.env*

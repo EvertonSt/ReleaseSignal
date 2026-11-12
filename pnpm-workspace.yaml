@@ -12,6 +12,10 @@ overrides:
   # major bump exists to ship the fix. `pnpm test:unit` and the production
   # build both run in CI on every commit, so a silent break here cannot land.
   deepmerge-ts: 8.0.2
+  # GHSA-68fv-2mgg-jv7q, event-loop denial of service in source-map-js
+  # <1.2.2. It is transitive through postcss; this patch-level override closes
+  # the advisory without changing the PostCSS major.
+  source-map-js: 1.2.2
 
 allowBuilds:
   "@prisma/client": true
@@ -24,20 +28,20 @@ allowBuilds:
   workerd: true
 
 # pnpm refuses packages published within the release-age window. The Next.js
-# 16.3.6 release that closes GHSA-vcvr-r3jv-pc5j is inside that window, so the
-# security fix has to be named here explicitly - the alternative is sitting on
-# a known RCE until the window closes.
+# 16.4.6 release that includes the current RCE and DoS fixes is inside that
+# window, so the security fix has to be named here explicitly - the alternative
+# is sitting on a known RCE until the window closes.
 minimumReleaseAgeExclude:
-  - "@next/env@16.3.8"
-  - "@next/eslint-plugin-next@16.3.8"
-  - "@next/swc-darwin-arm64@16.3.8"
-  - "@next/swc-darwin-x64@16.3.8"
-  - "@next/swc-linux-arm64-gnu@16.3.8"
-  - "@next/swc-linux-arm64-musl@16.3.8"
-  - "@next/swc-linux-x64-gnu@16.3.8"
-  - "@next/swc-linux-x64-musl@16.3.8"
-  - "@next/swc-win32-arm64-msvc@16.3.8"
-  - "@next/swc-win32-x64-msvc@16.3.8"
-  - eslint-config-next@16.3.8
-  - next@16.3.8
+  - "@next/env@16.4.6"
+  - "@next/eslint-plugin-next@16.4.6"
+  - "@next/swc-darwin-arm64@16.4.6"
+  - "@next/swc-darwin-x64@16.4.6"
+  - "@next/swc-linux-arm64-gnu@16.4.6"
+  - "@next/swc-linux-arm64-musl@16.4.6"
+  - "@next/swc-linux-x64-gnu@16.4.6"
+  - "@next/swc-linux-x64-musl@16.4.6"
+  - "@next/swc-win32-arm64-msvc@16.4.6"
+  - "@next/swc-win32-x64-msvc@16.4.6"
+  - eslint-config-next@16.4.6
+  - next@16.4.6
   - deepmerge-ts@8.0.2

@@ -148,7 +148,7 @@ A few choices that a reviewer would otherwise have to reverse-engineer:
   thresholds are enforced in CI, so the number cannot drift quietly.
 - **A vulnerable dependency is patched, not annotated.** Writing the CI
   security job turned up a critical RCE advisory against the framework version
-  this repository shipped. `next` and `eslint-config-next` moved to 16.3.8, and
+  this repository shipped. `next` and `eslint-config-next` moved to 16.4.6, and
   one transitive advisory with no upstream fix is closed by a commented
   [`overrides`](pnpm-workspace.yaml) entry rather than by a suppress file. The
   reasoning, including the alternatives rejected, is in
@@ -180,7 +180,7 @@ Recorded because they are more convincing than a claim that there were none:
 
 | Layer      | Choice                                              | Why                                                                                       |
 | ---------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Framework  | Next.js 16.3.8 (App Router), React 19               | Server components for the read paths, client components only where interaction needs them |
+| Framework  | Next.js 16.4.6 (App Router), React 19               | Server components for the read paths, client components only where interaction needs them |
 | Language   | TypeScript 5, `strict` + `noUncheckedIndexedAccess` | The compiler is the first reviewer                                                        |
 | Data       | Prisma 6 + PostgreSQL 16                            | Typed queries; migrations are checked in                                                  |
 | Validation | zod 4                                               | One schema at every trust boundary                                                        |
