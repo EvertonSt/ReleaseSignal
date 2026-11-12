@@ -1,8 +1,12 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { demoFailureClusters } from "@/lib/demo/data/failures";
+import { getApiSession, unauthorized } from "@/lib/api/session";
 
 /** GET /api/failures — List failure clusters with classification details */
-export function GET(request: NextRequest) {
+export async function GET(request: NextRequest) {
+  const session = await getApiSession();
+  if (!session) return unauthorized();
+
   const { searchParams } = new URL(request.url);
   const classification = searchParams.get("classification");
   const severity = searchParams.get("severity");

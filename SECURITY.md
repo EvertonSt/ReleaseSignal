@@ -31,9 +31,9 @@ honest version of "security fixes for old versions" is "upgrade to main".
 ## The ingestion endpoint
 
 `POST /api/ingress` is the only write path a third party can reach, and its
-`GET` read path uses the same bearer key. Database-backed dashboard reads
-require a GitHub session; the deterministic classifiers and static demo
-fixtures remain public.
+`GET` read path uses the same bearer key. Dashboard reads require a GitHub
+session. Only `/api/health`, the auth routes and the deterministic POST
+calculators remain public; no data read is anonymous.
 
 ### Authorization
 

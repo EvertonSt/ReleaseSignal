@@ -162,15 +162,12 @@ test.describe("API endpoints", () => {
   });
 
   test.describe("GET list endpoints", () => {
-    test("/api/failures returns clustered failures", async ({ request }) => {
-      const body = await json(await request.get("/api/failures"));
-      expect(body).toMatchObject({ failures: expect.any(Array) });
-      expect((body as { total: number }).total).toBeGreaterThan(0);
+    test("/api/failures requires a session", async ({ request }) => {
+      expect((await request.get("/api/failures")).status()).toBe(401);
     });
 
-    test("/api/gates returns gates with their rules", async ({ request }) => {
-      const body = (await json(await request.get("/api/gates"))) as { gates: unknown[] };
-      expect(body.gates.length).toBeGreaterThan(0);
+    test("/api/gates requires a session", async ({ request }) => {
+      expect((await request.get("/api/gates")).status()).toBe(401);
     });
 
     test("/api/runs requires a session instead of exposing every run", async ({ request }) => {
