@@ -1,5 +1,6 @@
 import NextAuth from "next-auth";
 import GitHub from "next-auth/providers/github";
+import { DEMO_COOKIE, isDemoValue } from "@/lib/demo";
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   /*
@@ -42,8 +43,13 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         request.nextUrl.pathname.startsWith("/settings") ||
         request.nextUrl.pathname.startsWith("/onboarding");
 
-      // In demo mode, allow access to all routes
-      if (process.env.NEXT_PUBLIC_DEMO_MODE === "true") {
+      // The build-time flag is for local/demo builds. The cookie lets the
+      // production build expose the synthetic demo from the login page without
+      // compiling the ingestion authorization check out of the bundle.
+      if (
+        process.env.NEXT_PUBLIC_DEMO_MODE === "true" ||
+        isDemoValue(request.cookies.get(DEMO_COOKIE)?.value)
+      ) {
         return true;
       }
 

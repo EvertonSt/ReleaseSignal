@@ -82,7 +82,7 @@ function LoginForm() {
 
           {/* Demo Access Button */}
           <a
-            href="/dashboard"
+            href="/demo"
             className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-border text-sm font-medium hover:bg-accent transition-colors"
           >
             <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
