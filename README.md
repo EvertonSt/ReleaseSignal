@@ -121,7 +121,7 @@ Numbers from `pnpm gate`, reproducible on a clean checkout:
 | `prettier --check`                | clean                                                          |
 | `tsc --noEmit`                    | 0 errors                                                       |
 | `eslint` (type-aware)             | 0 problems                                                     |
-| Unit tests                        | **341 passing**, 25 files                                      |
+| Unit tests                        | **346 passing**, 26 files                                      |
 | Coverage (domain + components)    | **79%** statements, **73%** branches — floor enforced at 70/65 |
 | `next build`                      | 22 routes emitted                                              |
 | E2E (Playwright)                  | against the **production build**, 743 tests, 5 browsers        |
@@ -215,7 +215,8 @@ NEXT_PUBLIC_DEMO_MODE=true pnpm dev
 > has to be rebuilt without the flag, not reconfigured.
 
 For a real deployment, set at minimum `DATABASE_URL`, `AUTH_SECRET` (from
-`openssl rand -base64 32`) and `INGEST_API_KEY`. The app also runs behind a
+`openssl rand -base64 32`), `INGEST_API_KEY` and `AUTH_ALLOWED_GITHUB_LOGINS`.
+Sign-in fails closed without an allowlist. The app also runs behind a
 reverse proxy in `docker-compose.yml` and on Vercel, both of which require
 `trustHost` for the OAuth round trip to complete.
 
@@ -247,6 +248,8 @@ Required environment variables:
 | `AUTH_SECRET`                               | yes       | `openssl rand -base64 32`. Rotating it invalidates every session. |
 | `INGEST_API_KEY`                            | yes       | `openssl rand -base64 32`. Bearer token for `POST /api/ingress`.  |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | for OAuth | Callback URL must be the deployed origin.                         |
+| `AUTH_ALLOWED_GITHUB_LOGINS`                | yes       | Comma-separated GitHub logins allowed to sign in. Fails closed.   |
+| `AUTH_ALLOWED_GITHUB_EMAILS`                | no        | Optional public-email allowlist when GitHub exposes the address.  |
 
 There is deliberately **no** `AUTH_TRUST_HOST` to set. Both deployment targets
 put the app behind a proxy that terminates TLS, which Auth.js refuses unless it
@@ -335,7 +338,7 @@ does not:
 - Quality-gate evaluation (8 rule types, 4 severities, 4 conditions)
 - Token-bucket rate limiting, HMAC webhook verification, secret redaction
 - Full dashboard UI: 11 routes, responsive, accessible
-- 341 unit tests, 743 end-to-end across five browser projects, six local gates
+- 346 unit tests, 745 end-to-end across five browser projects, six local gates
 - The production Prisma branch, on every push, against a real PostgreSQL
 
 **Implemented but not exercised end to end**

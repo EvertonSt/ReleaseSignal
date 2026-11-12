@@ -30,8 +30,10 @@ honest version of "security fixes for old versions" is "upgrade to main".
 
 ## The ingestion endpoint
 
-`POST /api/ingress` is the only write path a third party can reach. Everything
-else in the API either reads demo data or sits behind the GitHub session.
+`POST /api/ingress` is the only write path a third party can reach, and its
+`GET` read path uses the same bearer key. Database-backed dashboard reads
+require a GitHub session; the deterministic classifiers and static demo
+fixtures remain public.
 
 ### Authorization
 
@@ -73,9 +75,9 @@ Therefore:
   demo mode on purpose and sets no such variable, because it is not deploying.
 - `vercel.json` deliberately does not set the variable. It used to, which would
   have deployed exactly this build.
-- To check a deployment: `GET /api/ingress` is harmless, but
-  `POST /api/ingress` with **no** `Authorization` header must answer `401` or
-  `503`. A `201` means a demo build is live, and the endpoint is open.
+- To check a deployment: `GET /api/ingress` and `POST /api/ingress` with **no**
+  `Authorization` header must answer `401` or `503`. A `201` means a demo build
+  is live, and the endpoint is open.
 
 ### What a correct deployment sets
 
@@ -85,8 +87,20 @@ Therefore:
 | `AUTH_SECRET`                  | Session signing, from `openssl rand -base64 32` |
 | `INGEST_API_KEY`               | The bearer token above                          |
 | `GITHUB_CLIENT_ID` / `_SECRET` | GitHub OAuth, only if you want real sign-in     |
+| `AUTH_ALLOWED_GITHUB_LOGINS`   | Comma-separated logins; sign-in fails closed    |
+| `AUTH_ALLOWED_GITHUB_EMAILS`   | Optional public-email allowlist                 |
 
 `NEXT_PUBLIC_DEMO_MODE` must be absent or `false`.
+
+### Sign-in allowlist
+
+The GitHub OAuth callback only creates a session when the profile's `login`
+matches `AUTH_ALLOWED_GITHUB_LOGINS`, or its public `email` matches
+`AUTH_ALLOWED_GITHUB_EMAILS`. Both lists are optional individually, but **the
+callback fails closed when neither is configured**: a deployment with no
+allowlist accepts no OAuth identity. GitHub often hides the primary email, so
+the login list is the reliable production control. There is no Prisma adapter,
+so signing in does not create or update database users.
 
 ## Other controls
 

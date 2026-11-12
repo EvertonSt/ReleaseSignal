@@ -2,6 +2,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { validatePayload } from "@/lib/ingress/validator";
 import { authorizeIngest } from "@/lib/ingress/auth";
 import { processPayload, isDuplicate, getRun, getAllRuns, getRunCount } from "@/lib/ingress/processor";
+import { DEFAULT_ORG_ID } from "@/lib/db";
 import { generateId } from "@/lib/utils";
 
 /**
@@ -145,6 +146,9 @@ export async function POST(request: NextRequest) {
  *   ?runId=<id> — Get a specific run
  *   ?limit=<n> — Limit results (default 20)
  *
+ * Authorization: Bearer <INGEST_API_KEY> — the same credential as the write
+ * path. Reads are scoped to the organization that owns the key.
+ *
  * Reads go to PostgreSQL outside demo mode. They used to read the in-memory
  * Map unconditionally, which meant a real deployment answered `200` with an
  * empty list no matter how much had been ingested — and nothing caught it,
@@ -152,13 +156,24 @@ export async function POST(request: NextRequest) {
  */
 export async function GET(request: NextRequest) {
   const requestId = generateId("req");
+
+  // This is the CI read endpoint, so it uses the same bearer credential as the
+  // write path. Reads are limited to the single organization that owns that key.
+  const authorization = authorizeIngest(request.headers.get("authorization"));
+  if (!authorization.ok) {
+    return NextResponse.json(
+      { success: false, error: authorization.message, requestId },
+      { status: authorization.status }
+    );
+  }
+
   const { searchParams } = new URL(request.url);
 
   const runId = searchParams.get("runId");
 
   // Get specific run
   if (runId) {
-    const run = await getRun(runId);
+    const run = await getRun(runId, DEFAULT_ORG_ID);
     if (!run) {
       return NextResponse.json({ success: false, error: "Run not found", requestId }, { status: 404 });
     }
@@ -171,7 +186,10 @@ export async function GET(request: NextRequest) {
 
   // List all runs
   const limit = Math.min(parseInt(searchParams.get("limit") || "20"), 100);
-  const [allRuns, total] = await Promise.all([getAllRuns(limit), getRunCount()]);
+  const [allRuns, total] = await Promise.all([
+    getAllRuns(limit, DEFAULT_ORG_ID),
+    getRunCount(DEFAULT_ORG_ID),
+  ]);
 
   return NextResponse.json({
     success: true,

@@ -1,8 +1,12 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { getAllRuns, getRunCount } from "@/lib/ingress/processor";
+import { getApiSession, unauthorized } from "@/lib/api/session";
 
-/** GET /api/runs — List all ingested test runs */
+/** GET /api/runs — List ingested runs for the authenticated organization. */
 export async function GET(request: NextRequest) {
+  const session = await getApiSession();
+  if (!session) return unauthorized();
+
   const { searchParams } = new URL(request.url);
   const limit = Math.min(parseInt(searchParams.get("limit") || "50"), 100);
   const offset = parseInt(searchParams.get("offset") || "0");
@@ -13,7 +17,7 @@ export async function GET(request: NextRequest) {
   // Filtering happens in memory after a single read, which is why the read is
   // requested without a limit here: a page of results taken before filtering
   // would return fewer rows than the page size for no visible reason.
-  let runs = await getAllRuns(100);
+  let runs = await getAllRuns(100, session.organizationId);
 
   // Apply filters
   if (status) {
@@ -49,6 +53,9 @@ export async function GET(request: NextRequest) {
 }
 
 /** HEAD /api/runs — Run count without the body */
-export function HEAD() {
-  return NextResponse.json({ count: getRunCount() });
+export async function HEAD() {
+  const session = await getApiSession();
+  if (!session) return unauthorized();
+
+  return NextResponse.json({ count: await getRunCount(session.organizationId) });
 }

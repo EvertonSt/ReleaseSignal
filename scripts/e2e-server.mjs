@@ -199,7 +199,14 @@ async function main() {
     throw new Error(`non-demo build missing: ${NON_DEMO_DIST}/BUILD_ID not found`);
   }
 
-  const nonDemoEnv = { NEXT_PUBLIC_DEMO_MODE: "false", NEXT_DIST_DIR: NON_DEMO_DIST };
+  const nonDemoEnv = {
+    NEXT_PUBLIC_DEMO_MODE: "false",
+    NEXT_DIST_DIR: NON_DEMO_DIST,
+    // Auth.js requires a secret even for a request with no session cookie.
+    // Without one, every unauthenticated API read logs a MissingSecret error
+    // before correctly returning 401.
+    AUTH_SECRET: "e2e-auth-secret-not-used-by-these-tests",
+  };
 
   // The two authentication servers first, both from the same build. They differ
   // only in whether a key is configured, which is the entire point: 503 means
@@ -212,7 +219,11 @@ async function main() {
 
   // Last: Playwright waits on this one.
   log(`demo server starting on :${PORT_DEMO}`);
-  startServer(PORT_DEMO, { NEXT_PUBLIC_DEMO_MODE: "true" }, "demo");
+  startServer(
+    PORT_DEMO,
+    { NEXT_PUBLIC_DEMO_MODE: "true", AUTH_SECRET: "e2e-auth-secret-not-used-by-these-tests" },
+    "demo"
+  );
   await waitFor(`http://127.0.0.1:${PORT_DEMO}/login`, `demo server :${PORT_DEMO}`);
 
   log(`ready — demo :${PORT_DEMO}, unconfigured :${PORT_OPEN}, keyed :${PORT_KEYED}`);

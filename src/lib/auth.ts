@@ -1,5 +1,6 @@
 import NextAuth from "next-auth";
 import GitHub from "next-auth/providers/github";
+import { isAllowedGitHubIdentity } from "@/lib/auth-allowlist";
 import { DEMO_COOKIE, isDemoValue } from "@/lib/demo";
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
@@ -29,6 +30,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     strategy: "jwt",
   },
   callbacks: {
+    signIn({ profile }) {
+      return isAllowedGitHubIdentity(profile);
+    },
     authorized({ auth, request }) {
       const isLoggedIn = !!auth?.user;
       const isOnApp =

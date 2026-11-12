@@ -173,10 +173,11 @@ test.describe("API endpoints", () => {
       expect(body.gates.length).toBeGreaterThan(0);
     });
 
-    test("/api/runs lists ingested runs", async ({ request }) => {
-      const body = (await json(await request.get("/api/runs"))) as { runs: unknown[]; total: number };
-      expect(Array.isArray(body.runs)).toBe(true);
-      expect(body.total).toBeGreaterThanOrEqual(0);
+    test("/api/runs requires a session instead of exposing every run", async ({ request }) => {
+      // This server has no authenticated session, so the database-backed read
+      // must fail closed rather than return the whole organization's history.
+      const res = await request.get("/api/runs");
+      expect(res.status()).toBe(401);
     });
   });
 });

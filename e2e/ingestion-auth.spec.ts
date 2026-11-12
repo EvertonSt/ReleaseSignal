@@ -143,3 +143,15 @@ test.describe("POST /api/ingress authorization", () => {
     expect(keyed.status()).toBe(401);
   });
 });
+
+test.describe("GET /api/ingress authorization", () => {
+  test("fails closed when no key is configured", async ({ request }) => {
+    const response = await request.get(`${UNCONFIGURED}/api/ingress`);
+    expect(response.status()).toBe(503);
+  });
+
+  test("rejects a read with no Authorization header", async ({ request }) => {
+    const response = await request.get(`${KEYED}/api/ingress`);
+    expect(response.status()).toBe(401);
+  });
+});

@@ -609,17 +609,23 @@ const RUN_SELECT = {
   repository: { select: { fullName: true } },
 } as const;
 
-export async function getRun(runId: string): Promise<RunSummary | undefined> {
+export async function getRun(
+  runId: string,
+  organizationId = DEFAULT_ORG_ID
+): Promise<RunSummary | undefined> {
   if (isDemoMode()) {
     const stored = runs.get(runId);
     return stored ? summarize(stored) : undefined;
   }
 
-  const row = await prisma.testRun.findUnique({ where: { id: runId }, select: RUN_SELECT });
+  const row = await prisma.testRun.findFirst({
+    where: { id: runId, organizationId },
+    select: RUN_SELECT,
+  });
   return row ? summarizeRow(row) : undefined;
 }
 
-export async function getAllRuns(limit = 20): Promise<RunSummary[]> {
+export async function getAllRuns(limit = 20, organizationId = DEFAULT_ORG_ID): Promise<RunSummary[]> {
   if (isDemoMode()) {
     return Array.from(runs.values())
       .sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime())
@@ -628,6 +634,7 @@ export async function getAllRuns(limit = 20): Promise<RunSummary[]> {
   }
 
   const rows = await prisma.testRun.findMany({
+    where: { organizationId },
     orderBy: { createdAt: "desc" },
     take: limit,
     select: RUN_SELECT,
@@ -635,9 +642,9 @@ export async function getAllRuns(limit = 20): Promise<RunSummary[]> {
   return rows.map(summarizeRow);
 }
 
-export async function getRunCount(): Promise<number> {
+export async function getRunCount(organizationId = DEFAULT_ORG_ID): Promise<number> {
   if (isDemoMode()) return runs.size;
-  return prisma.testRun.count();
+  return prisma.testRun.count({ where: { organizationId } });
 }
 
 export function clearRuns(): void {

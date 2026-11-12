@@ -78,7 +78,9 @@ test.describe("POST /api/ingress against PostgreSQL", () => {
     // A fresh read. Nothing here is served from the request that just wrote it -
     // GET /api/ingress in non-demo mode queries Prisma, so finding the run means
     // the row is genuinely in the table.
-    const listed = await request.get(`${BASE}/api/ingress?runId=${created.data.runId}`);
+    const listed = await request.get(`${BASE}/api/ingress?runId=${created.data.runId}`, {
+      headers: AUTH,
+    });
     expect(listed.status()).toBe(200);
 
     const found = (await json(listed)) as {
@@ -148,7 +150,7 @@ test.describe("POST /api/ingress against PostgreSQL", () => {
   });
 
   test("the run list is readable and reflects what was ingested", async ({ request }) => {
-    const listed = await request.get(`${BASE}/api/ingress?limit=100`);
+    const listed = await request.get(`${BASE}/api/ingress?limit=100`, { headers: AUTH });
     expect(listed.status()).toBe(200);
 
     const body = (await json(listed)) as {
